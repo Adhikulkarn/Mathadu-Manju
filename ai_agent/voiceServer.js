@@ -7,6 +7,8 @@ import { WebSocketServer } from "ws"
 import { createSTTStream } from "./streamingSTT.js"
 import { runAgent } from "./agentController.js"
 import { speak } from "./streamingTTS.js"
+import { detectIntent } from "./intentParser.js"
+import { executeTool } from "./toolExecutor.js"
 
 const app = express()
 const server = http.createServer(app)
@@ -19,7 +21,22 @@ wss.on("connection", (ws) => {
 
     console.log("Driver connected")
 
+    // Prevent duplicate tool calls from repeated transcripts
+    let lastTranscript = ""
+
     const sttStream = createSTTStream(async (transcript) => {
+
+        transcript = transcript.trim()
+
+        if (!transcript) return
+
+        // Prevent STT jitter duplicates
+        if (transcript === lastTranscript) {
+            console.log("Duplicate transcript ignored")
+            return
+        }
+
+        lastTranscript = transcript
 
         console.log("------------------------------------------------")
         console.log("Transcript:", transcript)
@@ -28,29 +45,41 @@ wss.on("connection", (ws) => {
 
             const startTime = Date.now()
 
-            const aiResponse = await runAgent(transcript)
+            const intent = detectIntent(transcript)
 
-            const latency = Date.now() - startTime
+            let responseText
 
-            console.log("AI:", aiResponse)
-            console.log("Agent latency:", latency, "ms")
+            if (intent) {
 
-            const audioStream = await speak(aiResponse)
+                console.log("Shortcut intent detected:", intent.tool)
 
-            // Stream audio chunks to client
-            audioStream.on("data", (chunk) => {
+                const result = await executeTool(intent.tool, intent.args)
 
-                if (ws.readyState === ws.OPEN) {
-                    ws.send(chunk)
-                }
+                responseText = result.message || JSON.stringify(result)
 
-            })
+                console.log("Shortcut latency:", Date.now() - startTime, "ms")
 
-            audioStream.on("error", (err) => {
+            } else {
 
-                console.error("TTS stream error:", err)
+                console.log("No shortcut match → using LLM")
 
-            })
+                responseText = await runAgent(transcript)
+
+                console.log("Agent latency:", Date.now() - startTime, "ms")
+
+            }
+
+            console.log("AI:", responseText)
+
+            // Convert response to speech
+            const audio = await speak(responseText)
+
+            if (ws.readyState === ws.OPEN) {
+
+                // Send audio buffer back to client
+                ws.send(audio)
+
+            }
 
         } catch (err) {
 
