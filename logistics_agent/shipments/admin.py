@@ -1,3 +1,8 @@
 from django.contrib import admin
+from .models import Driver, Shipment, DelayReport, Incident
 
-# Register your models here.
+
+admin.site.register(Driver)
+admin.site.register(Shipment)
+admin.site.register(DelayReport)
+admin.site.register(Incident)
