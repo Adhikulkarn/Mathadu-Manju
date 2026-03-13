@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/components/CallButton.tsx","./src/components/StatusIndicator.tsx","./src/services/microphone.ts","./src/services/voiceSocket.ts"],"version":"5.9.3"}
