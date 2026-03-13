@@ -270,6 +270,7 @@ def agent_tools(request):
                 }
             }
         },
+
         {
             "type": "function",
             "function": {
@@ -285,11 +286,12 @@ def agent_tools(request):
                 }
             }
         },
+
         {
             "type": "function",
             "function": {
                 "name": "report_incident",
-                "description": "Report shipment incident",
+                "description": "Report shipment incident such as tire puncture or package damage",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -301,6 +303,25 @@ def agent_tools(request):
                 }
             }
         },
+
+        {
+            "type": "function",
+            "function": {
+                "name": "resolve_incident",
+                "description": "Resolve an incident when the issue has been fixed and delivery can resume",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "shipment_id": {
+                            "type": "string",
+                            "description": "Shipment ID whose incident has been resolved"
+                        }
+                    },
+                    "required": ["shipment_id"]
+                }
+            }
+        },
+
         {
             "type": "function",
             "function": {
@@ -315,6 +336,7 @@ def agent_tools(request):
                 }
             }
         },
+
         {
             "type": "function",
             "function": {
@@ -328,7 +350,20 @@ def agent_tools(request):
                     "required": ["driver_id"]
                 }
             }
+        },
+
+        {
+            "type": "function",
+            "function": {
+                "name": "dashboard_stats",
+                "description": "Retrieve warehouse dashboard statistics such as total shipments, delivered shipments, delays and incidents",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
         }
+
     ]
 
     return Response(tools)
