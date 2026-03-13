@@ -1,5 +1,6 @@
 import axios from "axios"
 import { DJANGO_API } from "./config.js"
+import { DRIVER_TOOL_NAMES, MANAGER_TOOL_NAMES } from "./toolLoader.js"
 
 const api = axios.create({
     baseURL: DJANGO_API,
@@ -37,17 +38,63 @@ const TOOL_ENDPOINTS = {
         method: "GET",
         url: (args) => `/api/next-delivery/${args.driver_id}/`
     },
+    get_assigned_shipments: {
+        method: "GET",
+        url: "/api/assigned-shipments"
+    },
 
     dashboard_stats: {
         method: "GET",
-        url: "/api/dashboard/stats"
+        url: "/api/dashboard"
+    },
+
+    query_shipments: {
+        method: "GET",
+        url: "/api/query-shipments"
+    },
+
+    query_incidents: {
+        method: "GET",
+        url: "/api/query-incidents"
+    },
+
+    assign_driver: {
+        method: "POST",
+        url: "/api/assign-driver"
     }
 
 }
 
-export function formatToolResult(result) {
+const BLOCKED_DRIVER_MESSAGE = "Drivers cannot access warehouse analytics."
+
+function buildQueryParams(args = {}) {
+    const params = {}
+
+    for (const [key, value] of Object.entries(args)) {
+        if (value !== undefined && value !== null && value !== "") {
+            params[key] = value
+        }
+    }
+
+    return params
+}
+
+function roleCanUseTool(role, toolName) {
+    if (role === "driver") {
+        return DRIVER_TOOL_NAMES.includes(toolName)
+    }
+
+    if (role === "manager") {
+        return MANAGER_TOOL_NAMES.includes(toolName)
+    }
+
+    return false
+}
+
+export function formatToolResult(result, { role } = {}) {
 
     if (!result) return "Operation completed."
+    if (result.message === BLOCKED_DRIVER_MESSAGE) return BLOCKED_DRIVER_MESSAGE
 
     if (result.action === "update_shipment_status") {
         return `Shipment ${result.shipment_id} has been marked as ${result.status}.`
@@ -58,23 +105,76 @@ export function formatToolResult(result) {
     }
 
     if (result.action === "dashboard_stats") {
-        return `There are ${result.delivered} deliveries completed and ${result.delayed} delayed shipments.`
+        return `There are ${result.delivered} deliveries completed, ${result.delayed} delayed shipments, and ${result.incidents} incidents.`
+    }
+
+    if (result.action === "get_next_delivery") {
+        return `Your next delivery is shipment ${result.shipment_id} to ${result.destination}.`
+    }
+
+    if (result.action === "get_assigned_shipments") {
+        if (!result.shipments?.length) {
+            return "You have no assigned shipments."
+        }
+
+        const shipments = result.shipments
+            .map((shipment) => `${shipment.shipment_id} ${shipment.status}`)
+            .join(", ")
+
+        return `Assigned shipments: ${shipments}.`
+    }
+
+    if (result.action === "query_shipments") {
+        if (!result.shipments?.length) {
+            return "No shipments matched that filter."
+        }
+
+        if (role === "driver") {
+            return `Found ${result.shipments.length} shipments.`
+        }
+
+        const shipments = result.shipments
+            .map((shipment) => shipment.shipment_id)
+            .join(", ")
+
+        return `There are ${result.shipments.length} shipments: ${shipments}.`
+    }
+
+    if (result.action === "query_incidents") {
+        if (!result.incidents?.length) {
+            return "There are no incidents matching that filter."
+        }
+
+        const incidents = result.incidents
+            .map((incident) => incident.shipment_id)
+            .join(", ")
+
+        return `There are ${result.incidents.length} incidents: ${incidents}.`
     }
 
     return result.message || "Operation completed."
 }
 
-export async function executeTool(toolName, args = {}) {
+export async function executeTool(toolName, args = {}, context = {}) {
+    const { role, driver_id } = context
+    args = args || {}
+
+    if (!roleCanUseTool(role, toolName)) {
+        return {
+            success: false,
+            message: role === "driver" ? BLOCKED_DRIVER_MESSAGE : "This tool is not available for the current role."
+        }
+    }
+
+    if (role === "driver") {
+        args.driver_id = driver_id
+    }
 
     const tool = TOOL_ENDPOINTS[toolName]
 
     if (!tool) {
         throw new Error(`Unknown tool: ${toolName}`)
     }
-
-    console.log("------------------------------------------------")
-    console.log("Executing tool:", toolName)
-    console.log("Arguments:", args)
 
     const start = Date.now()
 
@@ -89,7 +189,7 @@ export async function executeTool(toolName, args = {}) {
 
         } else if (tool.method === "GET") {
 
-            res = await api.get(url)
+            res = await api.get(url, { params: buildQueryParams(args) })
 
         } else {
 

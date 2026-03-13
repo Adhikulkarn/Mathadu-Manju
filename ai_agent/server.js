@@ -20,18 +20,19 @@ app.get("/health", (req, res) => {
 })
 
 app.get("/tools", (req, res) => {
-    res.json({ tools: getTools() })
+    const role = req.query.role ?? "manager"
+    res.json({ tools: getTools(role) })
 })
 
 app.post("/voice-agent", async (req, res) => {
 
-  const { message } = req.body
+  const { message, role = "manager", driver_id } = req.body
 
   console.log("Driver:", message)
 
   try {
 
-    const reply = await runAgent(message)
+    const reply = await runAgent({ message, role, driver_id })
 
     res.json({
       reply

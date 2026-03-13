@@ -1,10 +1,34 @@
 import groq from "./groqClient.js"
-import { getTools } from "./toolLoader.js"
+import { getToolsForRole } from "./toolLoader.js"
 import { executeTool, formatToolResult } from "./toolExecutor.js"
 
-const SYSTEM_PROMPT = "You are a logistics dispatch assistant. Always use tools when answering shipment or delivery questions."
+const SYSTEM_PROMPTS = {
+  driver: `You are a logistics assistant helping a delivery driver.
+
+You can:
+show assigned shipments
+get next delivery
+update shipment status
+report delays
+report incidents
+resume delivery after incidents
+
+Drivers cannot access warehouse analytics.
+Keep driver responses short and operational.`,
+  manager: `You are a warehouse operations assistant.
+
+You help managers:
+view dashboard statistics
+list shipments
+list incidents
+update shipment status
+assign drivers
+
+Use tools for shipment, incident, assignment, and analytics requests.`
+}
 const OPERATIONAL_QUERY_REGEX = /\b(shipment|delivery|incident|delay)\b/i
 const SAFE_OPERATIONAL_FALLBACK = "I need to retrieve that information from the logistics system."
+const LOW_SIGNAL_MESSAGE_REGEX = /^(?:hi|hello|hey|okay|ok|yes|no|hmm|uh|um|repeat|again)\b[\s.!?]*$/i
 
 function stripToolNarration(text = "") {
   return text
@@ -13,9 +37,21 @@ function stripToolNarration(text = "") {
     .trim()
 }
 
-export async function runAgent(message) {
+function getSystemPrompt(role) {
+  return SYSTEM_PROMPTS[role] ?? SYSTEM_PROMPTS.manager
+}
 
-  const tools = getTools()
+export async function runAgent({ message, role, driver_id }) {
+  role = role ?? "manager"
+  message = (message ?? "").trim()
+
+  if (!message || message.length < 5 || LOW_SIGNAL_MESSAGE_REGEX.test(message)) {
+    return "I did not understand the request. Please repeat."
+  }
+
+  const tools = getToolsForRole(role)
+
+  console.log("Role:", role)
 
   const response = await groq.chat.completions.create({
 
@@ -24,7 +60,7 @@ export async function runAgent(message) {
     messages: [
       {
         role: "system",
-        content: SYSTEM_PROMPT
+        content: getSystemPrompt(role)
       },
       {
         role: "user",
@@ -41,16 +77,41 @@ export async function runAgent(message) {
   const toolCalls = response.choices[0].message.tool_calls ?? []
 
   if (toolCalls.length > 0) {
+    const toolCall = toolCalls[0]
 
-    const toolName = toolCalls[0].function.name
-    const args = JSON.parse(toolCalls[0].function.arguments)
+    if (!toolCall || !toolCall.function) {
+      return "I did not understand the request. Please repeat."
+    }
 
-    console.log("LLM decision:", toolName)
+    const toolName = toolCall.function.name
+    let args = {}
+
+    try {
+      args = toolCall.function.arguments
+        ? JSON.parse(toolCall.function.arguments)
+        : {}
+    } catch (e) {
+      console.error("Tool arg parse error:", e)
+      args = {}
+    }
+
+    args = args || {}
+
+    if (role === "driver") {
+      args.driver_id = driver_id
+    }
+
+    console.log("LLM tool:", toolName)
     console.log("Tool args:", args)
 
-    const result = await executeTool(toolName, args)
+    try {
+      const result = await executeTool(toolName, args, { role, driver_id })
 
-    return formatToolResult(result)
+      return formatToolResult(result, { role })
+    } catch (err) {
+      console.error("Tool execution failed:", err)
+      return "The system encountered an error while executing the request."
+    }
   }
 
   const responseText = stripToolNarration(response.choices[0].message.content ?? "")

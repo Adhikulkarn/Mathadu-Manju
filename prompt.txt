@@ -1,266 +1,127 @@
-You are fixing the React frontend of a logistics voice agent.
-
-The backend voice server runs at:
-
-ws://localhost:4000
-
-The React client streams microphone audio to the server and receives TTS audio responses.
-
-Current issues:
-
-1. WebSocket closes before connection is established
-2. Multiple WebSocket connections are created
-3. Microphone streaming is unstable
-4. Audio playback overlaps
-5. PWA meta warning
-
-Your task is to rebuild the voice client with a **stable WebSocket lifecycle and proper audio streaming**.
-
-Do not modify the backend.
-
-Modify these files:
-
-src/services/voiceSocket.ts
-src/services/microphone.ts
-src/App.tsx
-index.html
-
----
-
-STEP 1 — Implement singleton WebSocket
-
-Create a single persistent socket connection.
-
-src/services/voiceSocket.ts
-
-let socket: WebSocket | null = null
-
-export function connectVoice(onAudio:(data:ArrayBuffer)=>void){
-
-if(socket && socket.readyState === WebSocket.OPEN){
-return socket
+ode voiceServer.js
+[dotenv@17.3.1] injecting env (0) from .env -- tip: 🛡️ auth for agents: https://vestauth.com
+[dotenv@17.3.1] injecting env (0) from .env -- tip: ⚙️  write to custom object with { processEnv: myObject }
+Voice server ready
+Voice pipeline running on port 4000
+Voice client connected
+Role: driver
+Driver ID: D001
+Deepgram STT connected
+Audio chunks received: 1
+------------------------------------------------
+Transcript: Can you give me the updates on today's order?
+Role: driver
+LLM tool: get_assigned_shipments
+Tool args: { driver_id: 'D001', limit: 10 }
+Tool get_assigned_shipments executed in 13 ms
+Tool result: {
+  success: true,
+  action: 'get_assigned_shipments',
+  driver_id: 'D001',
+  shipments: [
+    {
+      shipment_id: 'A001',
+      status: 'delivered',
+      destination: 'Warehouse 1'
+    },
+    {
+      shipment_id: 'A015',
+      status: 'delivered',
+      destination: 'Warehouse 4'
+    },
+    {
+      shipment_id: 'A017',
+      status: 'delivered',
+      destination: 'Warehouse 4'
+    },
+    {
+      shipment_id: 'A018',
+      status: 'delivered',
+      destination: 'Warehouse 1'
+    }
+  ]
 }
-
-socket = new WebSocket("ws://localhost:4000")
-
-socket.binaryType = "arraybuffer"
-
-socket.onopen = ()=>{
-console.log("Voice socket connected")
+------------------------------------------------
+Agent latency: 591 ms
+AI: Assigned shipments: A001 delivered, A015 delivered, A017 delivered, A018 delivered.
+Audio chunks received: 20
+TTS bytes: 174472
+Sending audio bytes: 174472
+------------------------------------------------
+Audio chunks received: 40
+Audio chunks received: 60
+Voice client disconnected
+Deepgram STT closed: { code: 1005, reason: '' }
+Voice client connected
+Role: driver
+Driver ID: D002
+Deepgram STT connected
+Audio chunks received: 1
+------------------------------------------------
+Transcript: Can you give me the updates on today's order?
+Role: driver
+LLM tool: get_assigned_shipments
+Tool args: { driver_id: 'D002', limit: 10 }
+Tool get_assigned_shipments executed in 6 ms
+Tool result: {
+  success: true,
+  action: 'get_assigned_shipments',
+  driver_id: 'D002',
+  shipments: [
+    {
+      shipment_id: 'A004',
+      status: 'in_transit',
+      destination: 'Warehouse 1'
+    },
+    {
+      shipment_id: 'A005',
+      status: 'delivered',
+      destination: 'Warehouse 2'
+    },
+    {
+      shipment_id: 'A006',
+      status: 'in_transit',
+      destination: 'Warehouse 2'
+    },
+    {
+      shipment_id: 'A013',
+      status: 'delivered',
+      destination: 'Warehouse 4'
+    }
+  ]
 }
-
-socket.onerror = (err)=>{
-console.error("WebSocket error",err)
+------------------------------------------------
+Agent latency: 387 ms
+AI: Assigned shipments: A004 in_transit, A005 delivered, A006 in_transit, A013 delivered.
+Audio chunks received: 20
+TTS bytes: 201220
+Sending audio bytes: 201220
+------------------------------------------------
+Audio chunks received: 40
+Audio chunks received: 60
+Voice client disconnected
+Deepgram STT closed: { code: 1005, reason: '' }
+Voice client connected
+Role: driver
+Driver ID: D003
+Audio chunks received: 1
+Deepgram STT connected
+Audio chunks received: 20
+Voice client disconnected
+Deepgram STT closed: { code: 1005, reason: '' }
+Voice client connected
+Role: manager
+Driver ID: null
+Audio chunks received: 1
+Deepgram STT connected
+Audio chunks received: 20
+Deepgram STT event: Metadata {
+  type: 'Metadata',
+  transaction_key: 'deprecated',
+  request_id: 'da040eea-1f25-4264-92dd-9ba832cfe611',
+  sha256: '762b5867b5b5545c79eb9e7a841d8cbfdab7afa56ea404971dbac0710e0e34b8',
+  created: '2026-03-13T22:05:26.472Z',
+  duration: 0,
+  channels: 0
 }
-
-socket.onclose = ()=>{
-console.log("Voice socket closed")
-}
-
-socket.onmessage = (event)=>{
-onAudio(event.data)
-}
-
-return socket
-}
-
-export function sendAudio(data:Blob){
-
-if(socket && socket.readyState === WebSocket.OPEN){
-socket.send(data)
-}
-
-}
-
-export function disconnectVoice(){
-
-if(socket){
-socket.close()
-socket = null
-}
-
-}
-
----
-
-STEP 2 — Stable microphone streaming
-
-src/services/microphone.ts
-
-import { sendAudio } from "./voiceSocket"
-
-let recorder:MediaRecorder | null = null
-
-export async function startMic(){
-
-const stream = await navigator.mediaDevices.getUserMedia({audio:true})
-
-recorder = new MediaRecorder(stream)
-
-recorder.ondataavailable = (event)=>{
-
-```
-if(event.data.size > 0){
-  sendAudio(event.data)
-}
-```
-
-}
-
-recorder.start(250)
-}
-
-export function stopMic(){
-
-if(recorder){
-recorder.stop()
-recorder = null
-}
-
-}
-
----
-
-STEP 3 — Stable WebSocket lifecycle
-
-Modify App.tsx so the socket connects **only once**.
-
-Use React useEffect.
-
-import { useEffect } from "react"
-import { connectVoice } from "./services/voiceSocket"
-
-let currentAudio:HTMLAudioElement | null = null
-
-function playAudio(data:ArrayBuffer){
-
-if(currentAudio){
-currentAudio.pause()
-}
-
-const blob = new Blob([data],{type:"audio/wav"})
-const url = URL.createObjectURL(blob)
-
-currentAudio = new Audio(url)
-currentAudio.play()
-
-}
-
-function App(){
-
-useEffect(()=>{
-
-```
-connectVoice(playAudio)
-```
-
-},[])
-
-return( <div className="h-screen flex items-center justify-center bg-gray-900 text-white">
-
-```
-  <div className="text-center">
-
-    <h1 className="text-3xl mb-10 font-bold">
-      Logistics Dispatch
-    </h1>
-
-    <CallButton/>
-
-  </div>
-
-</div>
-```
-
-)
-
-}
-
-export default App
-
----
-
-STEP 4 — Prevent audio overlap
-
-Reuse the same Audio instance when playing TTS responses.
-
-This avoids multiple overlapping responses.
-
-Already handled in playAudio().
-
----
-
-STEP 5 — Add connection status indicator
-
-Create component:
-
-src/components/StatusIndicator.tsx
-
-export default function StatusIndicator({connected}:{connected:boolean}){
-
-return(
-
-```
-<div className="mt-4 text-sm">
-
-  {connected ? "Connected to Dispatch" : "Connecting..."}
-
-</div>
-```
-
-)
-
-}
-
----
-
-STEP 6 — Fix PWA meta warning
-
-Replace in index.html
-
-<meta name="apple-mobile-web-app-capable" content="yes">
-
-with
-
-<meta name="mobile-web-app-capable" content="yes">
-
----
-
-STEP 7 — Test system
-
-Run backend:
-
-node voiceServer.js
-
-Run frontend:
-
-npm run dev
-
-Open:
-
-http://localhost:5173
-
-Press:
-
-CALL DISPATCH
-
-Speak:
-
-"Shipment A001 delivered"
-
-The backend should process the voice command and send TTS audio.
-
-The React client must automatically play the response.
-
----
-
-GOAL
-
-The voice client must:
-
-• maintain one WebSocket connection
-• stream microphone audio reliably
-• play TTS responses without overlap
-• work as a PWA dispatch interface
-
-Return clean modular code.
+Deepgram STT closed: { code: 1000, reason: '' }

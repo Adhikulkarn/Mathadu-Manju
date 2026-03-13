@@ -6,8 +6,9 @@
   color-scheme: dark;
   font-family: "Space Grotesk", "Segoe UI", sans-serif;
   background:
-    radial-gradient(circle at top, rgba(94, 234, 212, 0.18), transparent 30%),
-    linear-gradient(180deg, #122033 0%, #08111f 68%);
+    radial-gradient(circle at top, rgba(251, 191, 36, 0.16), transparent 28%),
+    radial-gradient(circle at 20% 20%, rgba(34, 211, 238, 0.16), transparent 30%),
+    linear-gradient(180deg, #10213a 0%, #07101d 72%);
   color: #f4f7fb;
 }
 

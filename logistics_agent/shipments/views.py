@@ -244,6 +244,143 @@ def get_next_delivery(request, driver_id):
     })
 
 
+@api_view(['GET'])
+def get_assigned_shipments(request):
+
+    driver_id = request.query_params.get("driver_id")
+    limit = int(request.query_params.get("limit", 5))
+
+    if not driver_id:
+        return Response({
+            "success": False,
+            "error": "driver_id is required"
+        }, status=400)
+
+    shipments = Shipment.objects.filter(
+        driver__driver_id=driver_id
+    ).order_by("created_at")[:limit]
+
+    return Response({
+        "success": True,
+        "action": "get_assigned_shipments",
+        "driver_id": driver_id,
+        "shipments": [
+            {
+                "shipment_id": shipment.shipment_id,
+                "status": shipment.status,
+                "destination": shipment.destination
+            }
+            for shipment in shipments
+        ]
+    })
+
+
+@api_view(['GET'])
+def query_shipments(request):
+
+    status = request.query_params.get("status")
+    driver_id = request.query_params.get("driver_id")
+    limit = int(request.query_params.get("limit", 10))
+
+    shipments = Shipment.objects.select_related("driver").all().order_by("created_at")
+
+    if status:
+        shipments = shipments.filter(status=status)
+
+    if driver_id:
+        shipments = shipments.filter(driver__driver_id=driver_id)
+
+    shipments = shipments[:limit]
+
+    return Response({
+        "success": True,
+        "action": "query_shipments",
+        "count": len(shipments),
+        "shipments": [
+            {
+                "shipment_id": shipment.shipment_id,
+                "status": shipment.status,
+                "destination": shipment.destination,
+                "driver_id": shipment.driver.driver_id if shipment.driver else None
+            }
+            for shipment in shipments
+        ]
+    })
+
+
+@api_view(['GET'])
+def query_incidents(request):
+
+    status = request.query_params.get("status")
+    driver_id = request.query_params.get("driver_id")
+    limit = int(request.query_params.get("limit", 10))
+
+    incidents = Incident.objects.select_related("shipment", "shipment__driver").all().order_by("-reported_at")
+
+    if status:
+        incidents = incidents.filter(status=status)
+
+    if driver_id:
+        incidents = incidents.filter(shipment__driver__driver_id=driver_id)
+
+    incidents = incidents[:limit]
+
+    return Response({
+        "success": True,
+        "action": "query_incidents",
+        "count": len(incidents),
+        "incidents": [
+            {
+                "shipment_id": incident.shipment.shipment_id,
+                "incident_type": incident.incident_type,
+                "status": incident.status,
+                "driver_id": incident.shipment.driver.driver_id if incident.shipment.driver else None
+            }
+            for incident in incidents
+        ]
+    })
+
+
+@api_view(['POST'])
+def assign_driver(request):
+
+    shipment_id = request.data.get("shipment_id")
+    driver_id = request.data.get("driver_id")
+
+    if not shipment_id or not driver_id:
+        return Response({
+            "success": False,
+            "error": "shipment_id and driver_id are required"
+        }, status=400)
+
+    try:
+        shipment = Shipment.objects.get(shipment_id=shipment_id)
+    except Shipment.DoesNotExist:
+        return Response({
+            "success": False,
+            "error": "Shipment not found"
+        }, status=404)
+
+    try:
+        driver = Driver.objects.get(driver_id=driver_id)
+    except Driver.DoesNotExist:
+        return Response({
+            "success": False,
+            "error": "Driver not found"
+        }, status=404)
+
+    shipment.driver = driver
+    shipment.save()
+
+    return Response({
+        "success": True,
+        "action": "assign_driver",
+        "shipment_id": shipment.shipment_id,
+        "driver_id": driver.driver_id,
+        "message": f"Shipment {shipment.shipment_id} has been assigned to driver {driver.driver_id}."
+    })
+
+
 # Agent Tool Definitions
 @api_view(['GET'])
 def agent_tools(request):

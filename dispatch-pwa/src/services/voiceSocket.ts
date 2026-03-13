@@ -1,54 +1,77 @@
 let socket: WebSocket | null = null
-let audioHandler: ((data: ArrayBuffer) => void) | null = null
-let statusHandler: ((connected: boolean) => void) | null = null
+let connectionId = 0
+
+function getVoiceSocketUrl() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+  const host = window.location.hostname || "localhost"
+
+  return `${protocol}//${host}:4000`
+}
 
 export function connectVoice(
   onAudio: (data: ArrayBuffer) => void,
-  onStatusChange?: (connected: boolean) => void
+  onStatusChange?: (connected: boolean) => void,
+  sessionInit?: { role: "driver" | "manager"; driver_id?: string }
 ) {
-  audioHandler = onAudio
-  statusHandler = onStatusChange ?? null
+  const statusHandler = onStatusChange ?? null
+  const sessionPayload = sessionInit ? { type: "session_init", ...sessionInit } : null
 
-  if (
-    socket &&
-    (socket.readyState === WebSocket.OPEN ||
-      socket.readyState === WebSocket.CONNECTING)
-  ) {
-    return socket
+  if (socket && socket.readyState <= WebSocket.OPEN) {
+    disconnectVoice()
   }
 
-  socket = new WebSocket("ws://localhost:4000")
-  socket.binaryType = "arraybuffer"
+  const nextSocket = new WebSocket(getVoiceSocketUrl())
+  const nextConnectionId = ++connectionId
+  nextSocket.binaryType = "arraybuffer"
+  socket = nextSocket
 
-  socket.onopen = () => {
+  nextSocket.onopen = () => {
+    if (connectionId !== nextConnectionId) {
+      return
+    }
+
     console.log("Voice socket connected")
+    if (sessionPayload) {
+      nextSocket.send(JSON.stringify(sessionPayload))
+    }
     statusHandler?.(true)
   }
 
-  socket.onerror = (error) => {
+  nextSocket.onerror = (error) => {
     console.error("WebSocket error", error)
   }
 
-  socket.onmessage = (event) => {
+  nextSocket.onmessage = (event) => {
+    if (connectionId !== nextConnectionId) {
+      return
+    }
+
     if (event.data instanceof ArrayBuffer) {
-      audioHandler?.(event.data)
+      console.log("Received audio bytes:", event.data.byteLength)
+      onAudio(event.data)
       return
     }
 
     if (event.data instanceof Blob) {
       void event.data.arrayBuffer().then((data) => {
-        audioHandler?.(data)
+        if (connectionId === nextConnectionId) {
+          console.log("Received audio bytes:", data.byteLength)
+          onAudio(data)
+        }
       })
     }
   }
 
-  socket.onclose = () => {
+  nextSocket.onclose = () => {
     console.log("Voice socket closed")
-    statusHandler?.(false)
-    socket = null
+
+    if (connectionId === nextConnectionId) {
+      statusHandler?.(false)
+      socket = null
+    }
   }
 
-  return socket
+  return nextSocket
 }
 
 export function sendAudio(data: Blob) {
@@ -57,12 +80,20 @@ export function sendAudio(data: Blob) {
   }
 }
 
+export function isVoiceConnected() {
+  return socket?.readyState === WebSocket.OPEN
+}
+
 export function disconnectVoice() {
-  if (socket && socket.readyState <= WebSocket.OPEN) {
-    socket.close()
+  const activeSocket = socket
+  const activeConnectionId = connectionId
+
+  if (activeSocket && activeSocket.readyState <= WebSocket.OPEN) {
+    activeSocket.close()
   }
 
-  socket = null
-  audioHandler = null
-  statusHandler = null
+  if (socket === activeSocket) {
+    connectionId = activeConnectionId + 1
+    socket = null
+  }
 }

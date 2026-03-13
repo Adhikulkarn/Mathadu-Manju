@@ -31,17 +31,44 @@ function normalizeTranscript(text) {
         .trim()
 }
 
+function parseSocketMessage(rawMessage) {
+    if (typeof rawMessage === "string") {
+        try {
+            return JSON.parse(rawMessage)
+        } catch {
+            return null
+        }
+    }
+
+    if (Buffer.isBuffer(rawMessage)) {
+        const asText = rawMessage.toString("utf8")
+
+        if (asText.startsWith("{")) {
+            try {
+                return JSON.parse(asText)
+            } catch {
+                return null
+            }
+        }
+    }
+
+    return null
+}
+
 wss.on("connection", (ws) => {
 
-    console.log("Driver connected")
+    console.log("Voice client connected")
+
+    ws.role = "manager"
+    ws.driver_id = null
+    let audioChunkCount = 0
 
     let lastTranscript = ""
 
     const sttStream = createSTTStream(async (transcript) => {
+        transcript = (transcript ?? "").trim()
 
-        transcript = transcript.trim()
-
-        if (!transcript) return
+        if (!transcript || transcript.length < 5) return
 
         if (transcript === lastTranscript) {
             console.log("Duplicate transcript ignored")
@@ -59,7 +86,15 @@ wss.on("connection", (ws) => {
 
             transcript = normalizeTranscript(transcript)
 
-            const responseText = await runAgent(transcript)
+            if (!transcript || transcript.length < 5) {
+                return
+            }
+
+            const responseText = await runAgent({
+                message: transcript,
+                role: ws.role,
+                driver_id: ws.driver_id
+            })
 
             console.log("Agent latency:", Date.now() - startTime, "ms")
             console.log("AI:", responseText)
@@ -67,6 +102,7 @@ wss.on("connection", (ws) => {
             const audio = await speak(responseText)
 
             if (ws.readyState === ws.OPEN) {
+                console.log("Sending audio bytes:", audio.length)
                 ws.send(audio)
             }
 
@@ -80,13 +116,29 @@ wss.on("connection", (ws) => {
 
     })
 
-    ws.on("message", (audioChunk) => {
+    ws.on("message", (message) => {
 
         if (!sttStream) return
 
         try {
 
-            const buffer = Buffer.from(audioChunk)
+            const payload = parseSocketMessage(message)
+
+            if (payload?.type === "session_init") {
+                ws.role = payload.role ?? "manager"
+                ws.driver_id = payload.driver_id ?? null
+
+                console.log("Role:", ws.role)
+                console.log("Driver ID:", ws.driver_id)
+                return
+            }
+
+            const buffer = Buffer.from(message)
+            audioChunkCount += 1
+
+            if (audioChunkCount === 1 || audioChunkCount % 20 === 0) {
+                console.log("Audio chunks received:", audioChunkCount)
+            }
 
             sttStream.send(buffer)
 
@@ -100,7 +152,7 @@ wss.on("connection", (ws) => {
 
     ws.on("close", () => {
 
-        console.log("Driver disconnected")
+        console.log("Voice client disconnected")
 
         if (sttStream) {
             sttStream.finish()
