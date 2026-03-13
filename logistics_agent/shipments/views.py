@@ -7,6 +7,7 @@ from .serializers import (
     IncidentSerializer,
     ShipmentSerializer
 )
+from django.db.models import Count
 
 
 # Update Shipment Status
@@ -30,7 +31,13 @@ def update_shipment_status(request):
 
         return Response({"message": "Shipment updated successfully"})
 
-    return Response(serializer.errors, status=400)
+    return Response({
+    "success": True,
+    "action": "update_shipment_status",
+    "shipment_id": shipment.shipment_id,
+    "status": shipment.status,
+    "message": f"Shipment {shipment.shipment_id} marked as {shipment.status}"
+    })
 
 
 # Report Delay
@@ -59,7 +66,14 @@ def report_delay(request):
 
         return Response({"message": "Delay reported successfully"})
 
-    return Response(serializer.errors, status=400)
+    return Response({
+    "success": True,
+    "action": "report_delay",
+    "shipment_id": shipment.shipment_id,
+    "status": shipment.status,
+    "reason": reason,
+    "message": f"Delay recorded for shipment {shipment.shipment_id}"
+    })
 
 
 # Report Incident
@@ -90,7 +104,14 @@ def report_incident(request):
 
         return Response({"message": "Incident reported successfully"})
 
-    return Response(serializer.errors, status=400)
+    return Response({
+    "success": True,
+    "action": "report_incident",
+    "shipment_id": shipment.shipment_id,
+    "incident_type": incident_type,
+    "status": shipment.status,
+    "message": f"Incident recorded for shipment {shipment.shipment_id}"
+    })
 
 
 # Get Shipment Status
@@ -104,7 +125,13 @@ def get_shipment_status(request, shipment_id):
 
     serializer = ShipmentSerializer(shipment)
 
-    return Response(serializer.data)
+    return Response({
+    "success": True,
+    "action": "get_shipment_status",
+    "shipment_id": shipment.shipment_id,
+    "status": shipment.status,
+    "destination": shipment.destination
+    })
 
 
 # Get Next Delivery
@@ -126,4 +153,70 @@ def get_next_delivery(request, driver_id):
 
     serializer = ShipmentSerializer(shipment)
 
-    return Response(serializer.data)
+    return Response({
+    "success": True,
+    "action": "get_next_delivery",
+    "shipment_id": shipment.shipment_id,
+    "destination": shipment.destination,
+    "status": shipment.status
+    })
+
+@api_view(['GET'])
+def agent_tools(request):
+
+    tools = [
+        {
+            "name": "update_shipment_status",
+            "description": "Update shipment delivery status",
+            "parameters": {
+                "shipment_id": "string",
+                "status": "string"
+            }
+        },
+        {
+            "name": "report_delay",
+            "description": "Report shipment delay",
+            "parameters": {
+                "shipment_id": "string",
+                "reason": "string"
+            }
+        },
+        {
+            "name": "report_incident",
+            "description": "Report shipment incident",
+            "parameters": {
+                "shipment_id": "string",
+                "incident_type": "string",
+                "description": "string"
+            }
+        },
+        {
+            "name": "get_shipment_status",
+            "description": "Get shipment status",
+            "parameters": {
+                "shipment_id": "string"
+            }
+        }
+    ]
+
+    return Response(tools)
+
+@api_view(['GET'])
+def dashboard_stats(request):
+
+    total_shipments = Shipment.objects.count()
+
+    delivered = Shipment.objects.filter(status="delivered").count()
+
+    delayed = Shipment.objects.filter(status="delayed").count()
+
+    incidents = Incident.objects.count()
+
+    return Response({
+        "success": True,
+        "action": "dashboard_stats",
+        "total_shipments": total_shipments,
+        "delivered": delivered,
+        "delayed": delayed,
+        "incidents": incidents
+    })
