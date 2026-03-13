@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<body>
+
+<button id="start">Start Mic</button>
+
+<script>
+
+const ws = new WebSocket("ws://localhost:4000")
+
+document.getElementById("start").onclick = async () => {
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+
+    const recorder = new MediaRecorder(stream)
+
+    recorder.ondataavailable = (event) => {
+
+        ws.send(event.data)
+
+    }
+
+    recorder.start(100)
+
+    console.log("Mic streaming started")
+
+}
+
+</script>
+
+</body>
+</html>

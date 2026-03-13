@@ -47,42 +47,60 @@ const TOOL_ENDPOINTS = {
 
 export async function executeTool(toolName, args = {}) {
 
-  const tool = TOOL_ENDPOINTS[toolName]
+    const tool = TOOL_ENDPOINTS[toolName]
 
-  if (!tool) {
-    throw new Error(`Unknown tool: ${toolName}`)
-  }
-
-  const start = Date.now()
-
-  try {
-
-    let res
-
-    if (tool.method === "POST") {
-      res = await api.post(tool.url, args)
+    if (!tool) {
+        throw new Error(`Unknown tool: ${toolName}`)
     }
 
-    if (tool.method === "GET") {
-      const url = typeof tool.url === "function" ? tool.url(args) : tool.url
-      res = await api.get(url)
+    console.log("------------------------------------------------")
+    console.log("Executing tool:", toolName)
+    console.log("Arguments:", args)
+
+    const start = Date.now()
+
+    try {
+
+        let res
+        let url = typeof tool.url === "function" ? tool.url(args) : tool.url
+
+        if (tool.method === "POST") {
+
+            res = await api.post(url, args)
+
+        } else if (tool.method === "GET") {
+
+            res = await api.get(url)
+
+        } else {
+
+            throw new Error(`Unsupported method: ${tool.method}`)
+
+        }
+
+        const latency = Date.now() - start
+
+        console.log(`Tool ${toolName} executed in ${latency} ms`)
+        console.log("Response:", res.data)
+        console.log("------------------------------------------------")
+
+        return res.data
+
+    } catch (err) {
+
+        console.error(`Tool execution failed: ${toolName}`)
+
+        if (err.response) {
+            console.error("Django error:", err.response.data)
+        } else {
+            console.error(err.message)
+        }
+
+        return {
+            success: false,
+            message: "Tool execution failed"
+        }
+
     }
-
-    const latency = Date.now() - start
-
-    console.log(`Tool ${toolName} executed in ${latency}ms`)
-
-    return res.data
-
-  } catch (err) {
-
-    console.error(`Tool execution failed: ${toolName}`, err.message)
-
-    return {
-      success: false,
-      message: "Tool execution failed"
-    }
-
-  }
 
 }
