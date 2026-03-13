@@ -4,6 +4,7 @@ import cors from "cors"
 import { PORT } from "./config.js"
 import { loadTools, getTools } from "./toolLoader.js"
 import { executeTool } from "./toolExecutor.js"
+import { runAgent } from "./agentController.js"
 
 const app = express()
 
@@ -24,43 +25,27 @@ app.get("/tools", (req, res) => {
 
 app.post("/voice-agent", async (req, res) => {
 
-    const { message } = req.body
+  const { message } = req.body
 
-    console.log("Driver:", message)
+  console.log("Driver:", message)
 
-    try {
+  try {
 
-        /* temporary logic before LLM */
+    const reply = await runAgent(message)
 
-        if (message.toLowerCase().includes("delivered")) {
+    res.json({
+      reply
+    })
 
-            const result = await executeTool(
-                "update_shipment_status",
-                {
-                    shipment_id: "A101",
-                    status: "delivered"
-                }
-            )
+  } catch (err) {
 
-            return res.json({
-                reply: result.message
-            })
+    console.error(err)
 
-        }
+    res.status(500).json({
+      error: "Agent failed"
+    })
 
-        res.json({
-            reply: "Command received"
-        })
-
-    } catch (err) {
-
-        console.error(err)
-
-        res.status(500).json({
-            error: "Agent error"
-        })
-
-    }
+  }
 
 })
 

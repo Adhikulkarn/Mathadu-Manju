@@ -10,17 +10,17 @@ const TOOL_ENDPOINTS = {
 
     update_shipment_status: {
         method: "POST",
-        url: "/api/update-shipment-status/"
+        url: "/api/update-shipment-status"
     },
 
     report_delay: {
         method: "POST",
-        url: "/api/report-delay/"
+        url: "/api/report-delay"
     },
 
     report_incident: {
         method: "POST",
-        url: "/api/report-incident/"
+        url: "/api/report-incident"
     },
 
     resolve_incident: {
