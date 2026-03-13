@@ -1,0 +1,292 @@
+You are working on a Node.js logistics voice agent.
+
+Current architecture:
+
+Deepgram STT
+→ toolRouter.js
+→ agentController.js
+→ toolExecutor.js
+→ Django REST API
+→ Deepgram TTS
+
+The current router-based system is too rigid and prevents natural language interaction.
+
+Your task is to convert the system into a **proper LLM tool-calling architecture** where:
+
+The LLM understands the user request and decides which backend API to call.
+
+DO NOT modify Django backend.
+
+Modify only these files:
+
+agentController.js
+voiceServer.js
+toolExecutor.js
+toolLoader.js
+
+Remove logic from:
+
+toolRouter.js (it will no longer be used)
+
+---
+
+GOAL ARCHITECTURE
+
+Voice
+↓
+Deepgram STT
+↓
+normalizeTranscript()
+↓
+runAgent()
+↓
+LLM chooses tool
+↓
+executeTool()
+↓
+formatToolResult()
+↓
+Deepgram TTS
+
+---
+
+STEP 1 — Remove router layer
+
+Delete routing logic in voiceServer.js.
+
+Replace:
+
+routeRequest(transcript)
+
+with:
+
+runAgent(transcript)
+
+The LLM must now decide which tool to call.
+
+---
+
+STEP 2 — Define available tools
+
+Inside toolLoader.js define tools for the LLM.
+
+Example:
+
+export const tools = [
+
+{
+type: "function",
+function: {
+name: "update_shipment_status",
+description: "Update shipment delivery status such as delivered or delayed",
+parameters: {
+type: "object",
+properties: {
+shipment_id: {
+type: "string",
+description: "Shipment ID like A001"
+},
+status: {
+type: "string",
+enum: ["delivered","delayed","in_transit"]
+}
+},
+required: ["shipment_id","status"]
+}
+}
+},
+
+{
+type: "function",
+function: {
+name: "get_shipment_status",
+description: "Retrieve the status and destination of a shipment",
+parameters: {
+type: "object",
+properties: {
+shipment_id: {
+type: "string"
+}
+},
+required: ["shipment_id"]
+}
+}
+},
+
+{
+type: "function",
+function: {
+name: "dashboard_stats",
+description: "Get dashboard statistics for deliveries",
+parameters: {
+type: "object",
+properties: {}
+}
+}
+}
+
+]
+
+---
+
+STEP 3 — Modify agentController.js
+
+Create a function:
+
+export async function runAgent(message)
+
+Inside it:
+
+Call Groq LLM with tools.
+
+Example structure:
+
+const response = await groq.chat.completions.create({
+
+model: "llama3-70b-8192",
+
+messages: [
+{
+role: "system",
+content: "You are a logistics dispatch assistant. Always use tools when answering shipment or delivery questions."
+},
+{
+role: "user",
+content: message
+}
+],
+
+tools: tools,
+tool_choice: "auto",
+temperature: 0
+
+})
+
+---
+
+STEP 4 — Detect tool calls
+
+After receiving response:
+
+const toolCalls = response.choices[0].message.tool_calls
+
+If toolCalls exist:
+
+const toolName = toolCalls[0].function.name
+const args = JSON.parse(toolCalls[0].function.arguments)
+
+Call:
+
+executeTool(toolName, args)
+
+---
+
+STEP 5 — Execute Django API
+
+Use toolExecutor.js.
+
+Example:
+
+const result = await executeTool(toolName, args)
+
+---
+
+STEP 6 — Format response
+
+Add a formatter.
+
+function formatToolResult(result){
+
+if(result.action === "update_shipment_status"){
+return `Shipment ${result.shipment_id} has been marked as ${result.status}`
+}
+
+if(result.action === "get_shipment_status"){
+return `Shipment ${result.shipment_id} is currently ${result.status} and heading to ${result.destination}`
+}
+
+if(result.action === "dashboard_stats"){
+return `There are ${result.delivered} deliveries completed and ${result.delayed} delayed shipments`
+}
+
+return result.message
+}
+
+Return formatted text to the voice system.
+
+---
+
+STEP 7 — Guard against hallucination
+
+If LLM returns NO tool call but user message contains words:
+
+shipment
+delivery
+incident
+delay
+
+Then return:
+
+"I need to retrieve that information from the logistics system."
+
+This prevents the LLM from fabricating logistics data.
+
+---
+
+STEP 8 — voiceServer.js flow
+
+voiceServer should do:
+
+transcript
+↓
+normalizeTranscript()
+↓
+runAgent(transcript)
+↓
+generateTTS(response)
+
+---
+
+STEP 9 — Logging
+
+Add logs:
+
+console.log("Transcript:", transcript)
+console.log("LLM decision:", toolName)
+console.log("Tool args:", args)
+
+---
+
+STEP 10 — Test cases
+
+Verify:
+
+Input:
+"Shipment A001 delivered"
+
+Expected tool call:
+update_shipment_status
+
+Input:
+"Give me an update on shipment A005"
+
+Expected tool call:
+get_shipment_status
+
+Input:
+"How many deliveries are left?"
+
+Expected tool call:
+dashboard_stats
+
+Input:
+"Tell me a joke"
+
+Expected:
+normal LLM response
+
+---
+
+Goal:
+
+The LLM must understand natural language and select the correct Django API tool automatically.

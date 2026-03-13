@@ -7,8 +7,6 @@ import { WebSocketServer } from "ws"
 import { createSTTStream } from "./streamingSTT.js"
 import { runAgent } from "./agentController.js"
 import { speak } from "./streamingTTS.js"
-import { detectIntent } from "./intentParser.js"
-import { executeTool } from "./toolExecutor.js"
 
 const app = express()
 const server = http.createServer(app)
@@ -17,11 +15,26 @@ const wss = new WebSocketServer({ server })
 
 console.log("Voice server ready")
 
+function normalizeTranscript(text) {
+    return text
+        .toLowerCase()
+        .replace(/ship\s?ment/g, "shipment")
+        .replace(/shipping/g, "shipment")
+        .replace(/soupment/g, "shipment")
+        .replace(/shipment id/g, "shipment")
+        .replace(/shipment number/g, "shipment")
+        .replace(/\ba\s+0\s+0\s+(\d)\b/g, "a00$1")
+        .replace(/\ba\s+(\d)\s+(\d)\s+(\d)\b/g, "a$1$2$3")
+        .replace(/\ba\s+(\d{3})\b/g, "a$1")
+        .replace(/\b(please|hey|ok|okay|can you|could you)\b/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+}
+
 wss.on("connection", (ws) => {
 
     console.log("Driver connected")
 
-    // Prevent duplicate tool calls from repeated transcripts
     let lastTranscript = ""
 
     const sttStream = createSTTStream(async (transcript) => {
@@ -30,7 +43,6 @@ wss.on("connection", (ws) => {
 
         if (!transcript) return
 
-        // Prevent STT jitter duplicates
         if (transcript === lastTranscript) {
             console.log("Duplicate transcript ignored")
             return
@@ -45,40 +57,17 @@ wss.on("connection", (ws) => {
 
             const startTime = Date.now()
 
-            const intent = detectIntent(transcript)
+            transcript = normalizeTranscript(transcript)
 
-            let responseText
+            const responseText = await runAgent(transcript)
 
-            if (intent) {
-
-                console.log("Shortcut intent detected:", intent.tool)
-
-                const result = await executeTool(intent.tool, intent.args)
-
-                responseText = result.message || JSON.stringify(result)
-
-                console.log("Shortcut latency:", Date.now() - startTime, "ms")
-
-            } else {
-
-                console.log("No shortcut match → using LLM")
-
-                responseText = await runAgent(transcript)
-
-                console.log("Agent latency:", Date.now() - startTime, "ms")
-
-            }
-
+            console.log("Agent latency:", Date.now() - startTime, "ms")
             console.log("AI:", responseText)
 
-            // Convert response to speech
             const audio = await speak(responseText)
 
             if (ws.readyState === ws.OPEN) {
-
-                // Send audio buffer back to client
                 ws.send(audio)
-
             }
 
         } catch (err) {

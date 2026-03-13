@@ -3,7 +3,7 @@ import WebSocket from "ws"
 export function createSTTStream(onTranscript) {
 
     const url =
-        "wss://api.deepgram.com/v1/listen?model=nova-3&interim_results=true&smart_format=true"
+        "wss://api.deepgram.com/v1/listen?model=nova-3&language=en-US&numerals=true&smart_format=true&interim_results=true"
 
     const connection = new WebSocket(url, {
         headers: {

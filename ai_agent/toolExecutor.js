@@ -45,6 +45,25 @@ const TOOL_ENDPOINTS = {
 
 }
 
+export function formatToolResult(result) {
+
+    if (!result) return "Operation completed."
+
+    if (result.action === "update_shipment_status") {
+        return `Shipment ${result.shipment_id} has been marked as ${result.status}.`
+    }
+
+    if (result.action === "get_shipment_status") {
+        return `Shipment ${result.shipment_id} is currently ${result.status} and heading to ${result.destination}.`
+    }
+
+    if (result.action === "dashboard_stats") {
+        return `There are ${result.delivered} deliveries completed and ${result.delayed} delayed shipments.`
+    }
+
+    return result.message || "Operation completed."
+}
+
 export async function executeTool(toolName, args = {}) {
 
     const tool = TOOL_ENDPOINTS[toolName]
@@ -81,7 +100,7 @@ export async function executeTool(toolName, args = {}) {
         const latency = Date.now() - start
 
         console.log(`Tool ${toolName} executed in ${latency} ms`)
-        console.log("Response:", res.data)
+        console.log("Tool result:", res.data)
         console.log("------------------------------------------------")
 
         return res.data
