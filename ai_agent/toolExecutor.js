@@ -1,26 +1,66 @@
 import axios from "axios"
 import { DJANGO_API } from "./config.js"
 
+const api = axios.create({
+    baseURL: DJANGO_API,
+    timeout: 1000
+})
+
 const TOOL_ENDPOINTS = {
 
-    update_shipment_status: "/api/update-shipment-status",
-    report_delay: "/api/report-delay",
-    report_incident: "/api/report-incident",
-    resolve_incident: "/api/resolve-incident",
-    get_shipment_status: "/api/shipment-status",
-    get_next_delivery: "/api/next-delivery"
+    update_shipment_status: {
+        method: "POST",
+        url: "/api/update-shipment-status/"
+    },
+
+    report_delay: {
+        method: "POST",
+        url: "/api/report-delay/"
+    },
+
+    report_incident: {
+        method: "POST",
+        url: "/api/report-incident/"
+    },
+
+    resolve_incident: {
+        method: "POST",
+        url: "/api/resolve-incident/"
+    },
+
+    get_shipment_status: {
+        method: "GET",
+        url: (args) => `/api/shipment-status/${args.shipment_id}/`
+    },
+
+    get_next_delivery: {
+        method: "GET",
+        url: (args) => `/api/next-delivery/${args.driver_id}/`
+    }
 
 }
 
-export async function executeTool(toolName, args) {
+export async function executeTool(toolName, args = {}) {
 
-    const endpoint = TOOL_ENDPOINTS[toolName]
+    const tool = TOOL_ENDPOINTS[toolName]
 
-    if (!endpoint) {
+    if (!tool) {
         throw new Error(`Unknown tool: ${toolName}`)
     }
 
-    const res = await axios.post(`${DJANGO_API}${endpoint}`, args)
+    if (tool.method === "POST") {
 
-    return res.data
+        const res = await api.post(tool.url, args)
+        return res.data
+
+    }
+
+    if (tool.method === "GET") {
+
+        const url = typeof tool.url === "function" ? tool.url(args) : tool.url
+        const res = await api.get(url)
+
+        return res.data
+    }
+
 }
