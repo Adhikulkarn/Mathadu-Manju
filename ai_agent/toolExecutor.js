@@ -36,31 +36,53 @@ const TOOL_ENDPOINTS = {
     get_next_delivery: {
         method: "GET",
         url: (args) => `/api/next-delivery/${args.driver_id}/`
+    },
+
+    dashboard_stats: {
+        method: "GET",
+        url: "/api/dashboard/stats"
     }
 
 }
 
 export async function executeTool(toolName, args = {}) {
 
-    const tool = TOOL_ENDPOINTS[toolName]
+  const tool = TOOL_ENDPOINTS[toolName]
 
-    if (!tool) {
-        throw new Error(`Unknown tool: ${toolName}`)
-    }
+  if (!tool) {
+    throw new Error(`Unknown tool: ${toolName}`)
+  }
+
+  const start = Date.now()
+
+  try {
+
+    let res
 
     if (tool.method === "POST") {
-
-        const res = await api.post(tool.url, args)
-        return res.data
-
+      res = await api.post(tool.url, args)
     }
 
     if (tool.method === "GET") {
-
-        const url = typeof tool.url === "function" ? tool.url(args) : tool.url
-        const res = await api.get(url)
-
-        return res.data
+      const url = typeof tool.url === "function" ? tool.url(args) : tool.url
+      res = await api.get(url)
     }
+
+    const latency = Date.now() - start
+
+    console.log(`Tool ${toolName} executed in ${latency}ms`)
+
+    return res.data
+
+  } catch (err) {
+
+    console.error(`Tool execution failed: ${toolName}`, err.message)
+
+    return {
+      success: false,
+      message: "Tool execution failed"
+    }
+
+  }
 
 }
