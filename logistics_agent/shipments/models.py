@@ -17,6 +17,7 @@ class Shipment(models.Model):
         ('in_transit', 'In Transit'),
         ('delivered', 'Delivered'),
         ('delayed', 'Delayed'),
+        ('delay_due_to_incident', 'Delay Due To Incident'),
         ('incident', 'Incident'),
     ]
 
@@ -31,7 +32,7 @@ class Shipment(models.Model):
     )
 
     status = models.CharField(
-        max_length=20,
+        max_length=32,
         choices=STATUS_CHOICES,
         default='pending'
     )

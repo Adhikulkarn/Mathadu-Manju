@@ -1,27 +1,38 @@
 export async function speak(text) {
+  const voiceId = process.env.ELEVENLABS_VOICE_ID || "EXAVITQu4vr4xnSDxMaL"
   const response = await fetch(
-    "https://api.deepgram.com/v1/speak?model=aura-asteria-en&encoding=linear16&container=wav",
+    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
     {
       method: "POST",
       headers: {
-        "Authorization": `Token ${process.env.DEEPGRAM_API_KEY}`,
+        "xi-api-key": process.env.ELEVENLABS_API_KEY,
+        "Accept": "audio/mpeg",
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ text })
+      body: JSON.stringify({
+        text,
+        model_id: "eleven_multilingual_v2",
+        voice_settings: {
+          stability: 0.8,
+          similarity_boost: 0.9,
+          style: 0,
+          speed: 1,
+          use_speaker_boost: true
+        }
+      })
     }
   )
 
   if (!response.ok) {
     const err = await response.text()
-    console.error("Deepgram TTS HTTP error:", {
+    console.error("ElevenLabs TTS HTTP error:", {
       status: response.status,
       statusText: response.statusText,
       body: err
     })
-    throw new Error("Deepgram TTS error: " + err)
+    throw new Error("ElevenLabs TTS error: " + err)
   }
 
   const arrayBuffer = await response.arrayBuffer()
-  console.log("TTS bytes:", arrayBuffer.byteLength)
   return Buffer.from(arrayBuffer)
 }

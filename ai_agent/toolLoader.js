@@ -3,7 +3,7 @@ const TOOL_DEFINITIONS = {
         type: "function",
         function: {
             name: "get_next_delivery",
-            description: "Retrieve the next delivery assigned to the active driver",
+            description: "Retrieve the next delivery assigned to the active driver. Use for requests like 'what is my next delivery', 'what is my next stop', or 'where should I go next'.",
             parameters: {
                 type: "object",
                 properties: {
@@ -19,7 +19,7 @@ const TOOL_DEFINITIONS = {
         type: "function",
         function: {
             name: "get_assigned_shipments",
-            description: "List the shipments assigned to the active driver",
+            description: "List the shipments assigned to the active driver. Use for requests like 'what deliveries do I have today', 'which orders should I do today', 'show my assigned shipments', or 'give me today's delivery updates'.",
             parameters: {
                 type: "object",
                 properties: {
@@ -39,7 +39,7 @@ const TOOL_DEFINITIONS = {
         type: "function",
         function: {
             name: "get_shipment_status",
-            description: "Retrieve the status and destination of a shipment",
+            description: "Retrieve the status and destination of a shipment. Use when the user asks where a shipment is going, what its current status is, or asks for an exact update on a specific shipment.",
             parameters: {
                 type: "object",
                 properties: {
@@ -56,7 +56,7 @@ const TOOL_DEFINITIONS = {
         type: "function",
         function: {
             name: "update_shipment_status",
-            description: "Update shipment delivery status such as delivered, delayed, or in transit",
+            description: "Update shipment delivery status such as delivered, delayed, or in transit. Use when a driver or manager says a shipment was delivered, completed, finished, delayed, or should be moved to a new status.",
             parameters: {
                 type: "object",
                 properties: {
@@ -66,7 +66,7 @@ const TOOL_DEFINITIONS = {
                     },
                     status: {
                         type: "string",
-                        enum: ["delivered", "delayed", "in_transit"]
+                        enum: ["delivered", "delayed", "delay_due_to_incident", "in_transit"]
                     }
                 },
                 required: ["shipment_id", "status"]
@@ -77,7 +77,7 @@ const TOOL_DEFINITIONS = {
         type: "function",
         function: {
             name: "report_delay",
-            description: "Report that a shipment is delayed because of traffic or another issue",
+            description: "Report that a shipment is delayed because of traffic or another issue. Use when the driver says a delivery is late, delayed, or stuck.",
             parameters: {
                 type: "object",
                 properties: {
@@ -98,7 +98,7 @@ const TOOL_DEFINITIONS = {
         type: "function",
         function: {
             name: "report_incident",
-            description: "Report a shipment incident such as a puncture, breakdown, or package damage",
+            description: "Report a shipment incident such as a puncture, breakdown, or package damage. Use when the driver mentions an accident, puncture, breakdown, or other incident.",
             parameters: {
                 type: "object",
                 properties: {
@@ -123,7 +123,7 @@ const TOOL_DEFINITIONS = {
         type: "function",
         function: {
             name: "resolve_incident",
-            description: "Resolve an incident when help has arrived and delivery can resume",
+            description: "Resolve an incident when help has arrived and delivery can resume. Use for requests like 'close the incident on A001', 'mark the incident resolved', or 'the incident has been fixed'.",
             parameters: {
                 type: "object",
                 properties: {
@@ -140,7 +140,7 @@ const TOOL_DEFINITIONS = {
         type: "function",
         function: {
             name: "dashboard_stats",
-            description: "Get warehouse dashboard statistics for deliveries and incidents",
+            description: "Get warehouse dashboard statistics for deliveries and incidents. Use for manager requests about totals, counts, delayed shipments, delivered shipments, or overall dashboard state.",
             parameters: {
                 type: "object",
                 properties: {}
@@ -151,10 +151,14 @@ const TOOL_DEFINITIONS = {
         type: "function",
         function: {
             name: "query_shipments",
-            description: "Query shipments using optional status or driver filters",
+            description: "Query shipments using optional shipment ID, status, or driver filters. Use this for manager requests like 'where is shipment A007 going', 'show shipment A007', or 'list delayed shipments'.",
             parameters: {
                 type: "object",
                 properties: {
+                    shipment_id: {
+                        type: "string",
+                        description: "Shipment ID like A007"
+                    },
                     status: {
                         type: "string",
                         description: "Shipment status filter"
@@ -175,10 +179,14 @@ const TOOL_DEFINITIONS = {
         type: "function",
         function: {
             name: "query_incidents",
-            description: "List incidents with optional filters for status or driver",
+            description: "List incidents using optional shipment ID, incident status, or driver filters. Use this for manager requests like 'what incident happened on A004', 'show incident details for A001', or 'list open incidents'.",
             parameters: {
                 type: "object",
                 properties: {
+                    shipment_id: {
+                        type: "string",
+                        description: "Shipment ID like A004"
+                    },
                     status: {
                         type: "string",
                         description: "Incident status filter"
@@ -199,7 +207,7 @@ const TOOL_DEFINITIONS = {
         type: "function",
         function: {
             name: "assign_driver",
-            description: "Assign or reassign a driver to a shipment",
+            description: "Assign or reassign a driver to a shipment. Use for manager requests about ownership or changing who handles a shipment.",
             parameters: {
                 type: "object",
                 properties: {
@@ -213,6 +221,31 @@ const TOOL_DEFINITIONS = {
                     }
                 },
                 required: ["shipment_id", "driver_id"]
+            }
+        }
+    },
+    assign_incident_technician: {
+        type: "function",
+        function: {
+            name: "assign_incident_technician",
+            description: "Assign a technician or support person to the active incident on a shipment. Use for manager requests like 'assign Ramesh to A004 incident' or 'send a technician to shipment A004'.",
+            parameters: {
+                type: "object",
+                properties: {
+                    shipment_id: {
+                        type: "string",
+                        description: "Shipment ID like A004"
+                    },
+                    support_person: {
+                        type: "string",
+                        description: "Technician or support person name"
+                    },
+                    eta_minutes: {
+                        type: "integer",
+                        description: "Estimated arrival time in minutes"
+                    }
+                },
+                required: ["shipment_id", "support_person"]
             }
         }
     }
@@ -230,10 +263,13 @@ export const DRIVER_TOOL_NAMES = [
 
 export const MANAGER_TOOL_NAMES = [
     "dashboard_stats",
+    "get_shipment_status",
     "query_shipments",
     "query_incidents",
     "update_shipment_status",
-    "assign_driver"
+    "assign_driver",
+    "assign_incident_technician",
+    "resolve_incident"
 ]
 
 export async function loadTools() {

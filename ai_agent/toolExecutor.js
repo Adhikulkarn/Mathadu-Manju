@@ -61,6 +61,11 @@ const TOOL_ENDPOINTS = {
     assign_driver: {
         method: "POST",
         url: "/api/assign-driver"
+    },
+
+    assign_incident_technician: {
+        method: "POST",
+        url: "/api/assign-incident-technician"
     }
 
 }
@@ -91,21 +96,49 @@ function roleCanUseTool(role, toolName) {
     return false
 }
 
-export function formatToolResult(result, { role } = {}) {
+function formatStatusLabel(status = "") {
+    return status.replace(/_/g, " ")
+}
+
+function pickIncidentForQuestion(incidents, questionText = "") {
+    if (!incidents?.length) {
+        return null
+    }
+
+    const normalizedQuestion = (questionText || "").toLowerCase()
+
+    if (/\b(technician|support|eta|who is coming|who will fix|who is assigned)\b/.test(normalizedQuestion)) {
+        return (
+            incidents.find((incident) => incident.support_person) ||
+            incidents.find((incident) => typeof incident.eta_minutes === "number") ||
+            incidents[0]
+        )
+    }
+
+    return (
+        incidents.find(
+            (incident) => incident.status === "reported" || incident.status === "assistance_dispatched"
+        ) ||
+        incidents[0]
+    )
+}
+
+export function formatToolResult(result, { role, queryText } = {}) {
 
     if (!result) return "Operation completed."
     if (result.message === BLOCKED_DRIVER_MESSAGE) return BLOCKED_DRIVER_MESSAGE
 
     if (result.action === "update_shipment_status") {
-        return `Shipment ${result.shipment_id} has been marked as ${result.status}.`
+        return `Shipment ${result.shipment_id} has been marked as ${formatStatusLabel(result.status)}.`
     }
 
     if (result.action === "get_shipment_status") {
-        return `Shipment ${result.shipment_id} is currently ${result.status} and heading to ${result.destination}.`
+        return `Shipment ${result.shipment_id} is currently ${formatStatusLabel(result.status)} and heading to ${result.destination}.`
     }
 
     if (result.action === "dashboard_stats") {
-        return `There are ${result.delivered} deliveries completed, ${result.delayed} delayed shipments, and ${result.incidents} incidents.`
+        const delayDueToIncident = result.delay_due_to_incident ?? 0
+        return `There are ${result.delivered} deliveries completed, ${result.delayed} delayed shipments, ${delayDueToIncident} delayed due to incident, and ${result.incidents} active incidents.`
     }
 
     if (result.action === "get_next_delivery") {
@@ -129,6 +162,11 @@ export function formatToolResult(result, { role } = {}) {
             return "No shipments matched that filter."
         }
 
+        if (result.shipments.length === 1) {
+            const shipment = result.shipments[0]
+            return `Shipment ${shipment.shipment_id} is currently ${formatStatusLabel(shipment.status)} and heading to ${shipment.destination}.`
+        }
+
         if (role === "driver") {
             return `Found ${result.shipments.length} shipments.`
         }
@@ -145,11 +183,49 @@ export function formatToolResult(result, { role } = {}) {
             return "There are no incidents matching that filter."
         }
 
+        const formatIncidentDetails = (incident) => {
+            const description = incident.description
+                ? ` Reason: ${incident.description}.`
+                : ""
+            const supportInfo = incident.support_person
+                ? ` Technician assigned: ${incident.support_person}.`
+                : ""
+            const etaInfo = typeof incident.eta_minutes === "number"
+                ? ` ETA ${incident.eta_minutes} minutes.`
+                : ""
+
+            return `Shipment ${incident.shipment_id} has a ${incident.incident_type} incident with status ${incident.status}.${description}${supportInfo}${etaInfo}`
+                .replace(/\s+/g, " ")
+                .trim()
+        }
+
+        if (result.incidents.length === 1) {
+            return formatIncidentDetails(result.incidents[0])
+        }
+
+        const uniqueShipmentIds = [...new Set(result.incidents.map((incident) => incident.shipment_id))]
+
+        if (uniqueShipmentIds.length === 1) {
+            const primaryIncident = pickIncidentForQuestion(result.incidents, queryText)
+            return formatIncidentDetails(primaryIncident)
+        }
+
         const incidents = result.incidents
-            .map((incident) => incident.shipment_id)
+            .map((incident) => `${incident.shipment_id} ${incident.incident_type} ${incident.status}`)
             .join(", ")
 
         return `There are ${result.incidents.length} incidents: ${incidents}.`
+    }
+
+    if (result.action === "resolve_incident") {
+        return `Incident resolved for shipment ${result.shipment_id}. The shipment is now marked as ${formatStatusLabel(result.status)}.`
+    }
+
+    if (result.action === "assign_incident_technician") {
+        const etaInfo = typeof result.eta_minutes === "number"
+            ? ` ETA ${result.eta_minutes} minutes.`
+            : ""
+        return `Technician ${result.support_person} has been assigned to shipment ${result.shipment_id}.${etaInfo}`
     }
 
     return result.message || "Operation completed."

@@ -5,8 +5,28 @@ from .serializers import (
     ShipmentStatusUpdateSerializer,
     DelayReportSerializer,
     IncidentSerializer,
+    IncidentTechnicianAssignmentSerializer,
     ShipmentSerializer
 )
+
+
+@api_view(['GET'])
+def list_drivers(request):
+
+    drivers = Driver.objects.all().order_by("driver_id")
+
+    return Response({
+        "success": True,
+        "drivers": [
+            {
+                "driver_id": driver.driver_id,
+                "name": driver.name,
+                "phone": driver.phone,
+                "vehicle_number": driver.vehicle_number
+            }
+            for driver in drivers
+        ]
+    })
 
 
 # Update Shipment Status
@@ -186,14 +206,64 @@ def resolve_incident(request):
     incident.status = "resolved"
     incident.save()
 
-    shipment.status = "in_transit"
+    shipment.status = "delay_due_to_incident"
     shipment.save()
 
     return Response({
         "success": True,
         "action": "resolve_incident",
         "shipment_id": shipment.shipment_id,
-        "message": "Incident resolved. Delivery has resumed."
+        "status": shipment.status,
+        "message": "Incident resolved. Shipment status updated to delay due to incident."
+    })
+
+
+@api_view(['POST'])
+def assign_incident_technician(request):
+
+    serializer = IncidentTechnicianAssignmentSerializer(data=request.data)
+
+    if not serializer.is_valid():
+        return Response({
+            "success": False,
+            "error": serializer.errors
+        }, status=400)
+
+    shipment_id = serializer.validated_data["shipment_id"]
+    support_person = serializer.validated_data["support_person"]
+    eta_minutes = serializer.validated_data.get("eta_minutes")
+
+    try:
+        shipment = Shipment.objects.get(shipment_id=shipment_id)
+    except Shipment.DoesNotExist:
+        return Response({
+            "success": False,
+            "error": "Shipment not found"
+        }, status=404)
+
+    incident = Incident.objects.filter(
+        shipment=shipment,
+        status__in=["reported", "assistance_dispatched"]
+    ).order_by("-reported_at").first()
+
+    if not incident:
+        return Response({
+            "success": False,
+            "message": "No active incident found for this shipment"
+        }, status=404)
+
+    incident.support_person = support_person
+    incident.eta_minutes = eta_minutes
+    incident.status = "assistance_dispatched"
+    incident.save()
+
+    return Response({
+        "success": True,
+        "action": "assign_incident_technician",
+        "shipment_id": shipment.shipment_id,
+        "support_person": incident.support_person,
+        "eta_minutes": incident.eta_minutes,
+        "message": f"{incident.support_person} assigned to shipment {shipment.shipment_id} incident."
     })
 
 # Get Shipment Status
@@ -278,11 +348,15 @@ def get_assigned_shipments(request):
 @api_view(['GET'])
 def query_shipments(request):
 
+    shipment_id = request.query_params.get("shipment_id")
     status = request.query_params.get("status")
     driver_id = request.query_params.get("driver_id")
     limit = int(request.query_params.get("limit", 10))
 
     shipments = Shipment.objects.select_related("driver").all().order_by("created_at")
+
+    if shipment_id:
+        shipments = shipments.filter(shipment_id__iexact=shipment_id)
 
     if status:
         shipments = shipments.filter(status=status)
@@ -311,14 +385,21 @@ def query_shipments(request):
 @api_view(['GET'])
 def query_incidents(request):
 
+    shipment_id = request.query_params.get("shipment_id")
     status = request.query_params.get("status")
     driver_id = request.query_params.get("driver_id")
     limit = int(request.query_params.get("limit", 10))
 
     incidents = Incident.objects.select_related("shipment", "shipment__driver").all().order_by("-reported_at")
 
+    if shipment_id:
+        incidents = incidents.filter(shipment__shipment_id__iexact=shipment_id)
+
     if status:
-        incidents = incidents.filter(status=status)
+        if status.lower() == "open":
+            incidents = incidents.filter(status__in=["reported", "assistance_dispatched"])
+        else:
+            incidents = incidents.filter(status=status)
 
     if driver_id:
         incidents = incidents.filter(shipment__driver__driver_id=driver_id)
@@ -333,8 +414,11 @@ def query_incidents(request):
             {
                 "shipment_id": incident.shipment.shipment_id,
                 "incident_type": incident.incident_type,
+                "description": incident.description,
                 "status": incident.status,
-                "driver_id": incident.shipment.driver.driver_id if incident.shipment.driver else None
+                "driver_id": incident.shipment.driver.driver_id if incident.shipment.driver else None,
+                "support_person": incident.support_person,
+                "eta_minutes": incident.eta_minutes
             }
             for incident in incidents
         ]
@@ -512,8 +596,9 @@ def dashboard_stats(request):
 
     total_shipments = Shipment.objects.count()
     delivered = Shipment.objects.filter(status="delivered").count()
-    delayed = Shipment.objects.filter(status="delayed").count()
-    incidents = Incident.objects.count()
+    delayed = Shipment.objects.filter(status__in=["delayed", "delay_due_to_incident"]).count()
+    incidents = Incident.objects.filter(status__in=["reported", "assistance_dispatched"]).count()
+    delay_due_to_incident = Shipment.objects.filter(status="delay_due_to_incident").count()
 
     return Response({
         "success": True,
@@ -521,5 +606,6 @@ def dashboard_stats(request):
         "total_shipments": total_shipments,
         "delivered": delivered,
         "delayed": delayed,
-        "incidents": incidents
+        "incidents": incidents,
+        "delay_due_to_incident": delay_due_to_incident
     })

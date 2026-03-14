@@ -18,6 +18,12 @@ class IncidentSerializer(serializers.Serializer):
     description = serializers.CharField()
 
 
+class IncidentTechnicianAssignmentSerializer(serializers.Serializer):
+    shipment_id = serializers.CharField()
+    support_person = serializers.CharField()
+    eta_minutes = serializers.IntegerField(required=False, allow_null=True)
+
+
 class ShipmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Shipment

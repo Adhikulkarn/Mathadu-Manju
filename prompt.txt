@@ -1,39 +1,223 @@
-Optimize the voiceServer.js latency.
+We are migrating an existing voice assistant backend from a Whisper chunk STT system to ElevenLabs realtime speech-to-text.
 
-Changes required:
+The current project structure includes:
 
-1. Reduce audio chunk window
-Replace:
-setTimeout(..., 3000)
+voiceServer.js
+microphone.ts
+voiceSocket.ts
+streamingTTS.js
+agentController.js
 
-With:
-setTimeout(..., 800)
+The current STT implementation uses Groq Whisper with chunked WebM audio. This causes latency and hallucinations.
 
-2. Skip small buffers
-Before transcription add:
-if (audioBuffer.length < 12000) return
+We will remove Whisper STT entirely and replace it with ElevenLabs realtime speech-to-text using WebSockets.
 
-3. Prevent concurrent Whisper calls
-Add:
-let processing = false
+TARGET ARCHITECTURE
 
-Before transcribeAudio:
-if (processing) return
-processing = true
+Browser microphone
+→ WebSocket
+→ Node voiceServer
+→ ElevenLabs realtime STT
+→ transcript
+→ runAgent()
+→ ElevenLabs Flash TTS
+→ browser playback
 
-After transcription:
-processing = false
+------------------------------------------------
 
-4. Update whisperSTT.js model
+STEP 1 — REMOVE OLD STT FILES
 
-Replace:
-whisper-large-v3-turbo
+Delete:
 
-With:
-distil-whisper-large-v3-en
+streamingSTT.js
+whisperSTT.js
 
-Return the updated voiceServer.js and whisperSTT.js.
+Remove all imports of these files from voiceServer.js.
 
-Start TTS as soon as the agent responds, even if Whisper continues listening.
+Also remove:
 
-This makes it feel instant, even if transcription took ~800 ms.
+audio chunk buffering
+WebM header logic
+chunkTimer
+audioChunks
+processing flags
+
+The server should no longer buffer audio.
+
+------------------------------------------------
+
+STEP 2 — INSTALL DEPENDENCIES
+
+Install websocket client for ElevenLabs.
+
+npm install ws
+
+------------------------------------------------
+
+STEP 3 — ADD ELEVENLABS STT CONNECTION
+
+Inside voiceServer.js create a connection to:
+
+wss://api.elevenlabs.io/v1/speech-to-text/realtime
+
+Connection parameters:
+
+model_id=scribe_v2
+audio_format=pcm_16000
+commit_strategy=vad
+
+Headers:
+
+xi-api-key: process.env.ELEVENLABS_API_KEY
+
+Example:
+
+const sttSocket = new WebSocket(
+  "wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id=scribe_v2&audio_format=pcm_16000&commit_strategy=vad",
+  {
+    headers: {
+      "xi-api-key": process.env.ELEVENLABS_API_KEY
+    }
+  }
+)
+
+------------------------------------------------
+
+STEP 4 — FORWARD MICROPHONE AUDIO
+
+When WebSocket receives microphone audio from frontend:
+
+ws.on("message", (audio) => {
+
+  if (sttSocket.readyState === WebSocket.OPEN) {
+
+    sttSocket.send(JSON.stringify({
+      type: "input_audio_chunk",
+      audio: audio.toString("base64")
+    }))
+
+  }
+
+})
+
+------------------------------------------------
+
+STEP 5 — RECEIVE TRANSCRIPTS
+
+Listen for ElevenLabs transcription events.
+
+sttSocket.on("message", async (data) => {
+
+  const msg = JSON.parse(data)
+
+  if (msg.text && msg.text.length > 2) {
+
+    const transcript = msg.text.toLowerCase().trim()
+
+    console.log("Transcript:", transcript)
+
+    const response = await runAgent({
+      message: transcript,
+      role: ws.role,
+      driver_id: ws.driver_id
+    })
+
+    const audio = await speak(response)
+
+    ws.send(audio)
+
+  }
+
+})
+
+------------------------------------------------
+
+STEP 6 — SESSION INITIALIZATION
+
+Keep existing session initialization logic.
+
+When frontend sends:
+
+{
+  "type": "session_init",
+  "role": "driver",
+  "driver_id": "D002"
+}
+
+Update:
+
+ws.role
+ws.driver_id
+
+------------------------------------------------
+
+STEP 7 — REPLACE TTS WITH ELEVENLABS FLASH
+
+Update streamingTTS.js.
+
+Use endpoint:
+
+POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}
+
+Headers:
+
+xi-api-key: process.env.ELEVENLABS_API_KEY
+
+Body:
+
+{
+  "text": text,
+  "model_id": "eleven_flash_v2_5"
+}
+
+Return audio buffer.
+
+------------------------------------------------
+
+STEP 8 — CLEAN LOGGING
+
+Log only:
+
+Voice client connected
+Transcript
+Role
+Driver ID
+Agent response
+
+Remove:
+
+noise transcript logging
+command filtering
+silence detection
+
+These are no longer needed.
+
+------------------------------------------------
+
+STEP 9 — ERROR HANDLING
+
+If STT socket closes:
+
+reconnect automatically.
+
+If TTS fails:
+
+log error but do not crash.
+
+------------------------------------------------
+
+EXPECTED RESULT
+
+Driver speaks:
+
+"shipment A004 delivered"
+
+Realtime transcript appears:
+
+Transcript: shipment a004 delivered
+
+Tool executes:
+
+update_shipment_status
+
+TTS response returned in < 500ms.
