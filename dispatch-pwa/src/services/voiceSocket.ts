@@ -74,7 +74,7 @@ export function connectVoice(
   return nextSocket
 }
 
-export function sendAudio(data: Blob) {
+export function sendAudio(data: ArrayBuffer) {
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(data)
   }

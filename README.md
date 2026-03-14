@@ -1,55 +1,46 @@
 # Mathadu-Manju
 
-Mathadu-Manju is a logistics voice-agent project split into two cooperating applications:
+Mathadu-Manju is a voice-enabled logistics operations system built as three cooperating parts:
 
-1. A Django REST backend in `logistics_agent/` that stores shipment, driver, delay, and incident data in SQLite and exposes operational APIs.
-2. A Node.js AI and voice layer in `ai_agent/` that accepts driver messages, decides whether to use a direct intent shortcut or the Groq LLM, calls backend tools, and returns spoken responses through Deepgram TTS.
+1. A Django backend in `logistics_agent/` that owns shipments, drivers, delays, incidents, and dashboard data.
+2. A Node.js AI/voice orchestration layer in `ai_agent/` that handles LLM tool-calling, speech-to-text, and text-to-speech.
+3. A React + Vite frontend in `dispatch-pwa/` that provides the browser voice interface for drivers and warehouse managers.
 
-The core design goal of the project is operational safety: shipment data, delivery assignments, incident details, and dashboard metrics must come from Django APIs, not from free-form LLM text.
+The core architectural rule is simple: logistics facts should come from backend APIs, not from free-form model output.
 
-## High-Level Architecture
+## System Overview
 
-The system is organized around a hybrid agent pattern:
+At runtime, the project supports both text and voice interactions.
+
+### Text path
 
 ```text
-Driver Voice / Text
-        |
-        v
-Deepgram Streaming STT or HTTP message input
-        |
-        v
-Intent Shortcut Layer (regex-based)
-        |
-        +--> direct tool execution for simple operational commands
-        |
-        v
-Groq LLM reasoning for non-trivial requests
-        |
-        v
-Tool execution layer in Node.js
-        |
-        v
-Django REST API
-        |
-        v
-SQLite database
-        |
-        v
-Structured backend response
-        |
-        v
-Local response formatter in Node.js
-        |
-        v
-Deepgram TTS audio buffer
+Client
+  -> ai_agent/server.js
+  -> runAgent()
+  -> Groq tool call when needed
+  -> toolExecutor.js
+  -> Django REST API
+  -> formatted text response
 ```
 
-There are two important safety rules in the current implementation:
+### Voice path
 
-- Simple operational commands should bypass the LLM entirely and go straight to backend tools.
-- If the LLM receives an operational query but does not return a valid tool call, the Node agent blocks the answer instead of allowing logistics hallucinations.
+```text
+Browser microphone
+  -> MediaRecorder chunks
+  -> WebSocket to ai_agent/voiceServer.js
+  -> Deepgram Streaming STT
+  -> transcript normalization
+  -> runAgent()
+  -> Django API tool execution when needed
+  -> response text
+  -> Deepgram TTS
+  -> WAV audio bytes
+  -> browser playback
+```
 
-## Repository Layout
+## Repository Structure
 
 ```text
 .
@@ -67,78 +58,172 @@ There are two important safety rules in the current implementation:
 │   ├── streamingTTS.js
 │   ├── toolExecutor.js
 │   ├── toolLoader.js
+│   ├── toolRouter.js
 │   └── voiceServer.js
+├── dispatch-pwa/
+│   ├── package.json
+│   ├── public/
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── components/
+│   │   └── services/
+│   └── vite.config.ts
 ├── logistics_agent/
-│   ├── db.sqlite3
 │   ├── logistics_agent/
-│   │   ├── asgi.py
-│   │   ├── settings.py
-│   │   ├── urls.py
-│   │   └── wsgi.py
 │   ├── manage.py
 │   ├── requirements.txt
 │   └── shipments/
-│       ├── admin.py
-│       ├── apps.py
-│       ├── management/commands/seed_data.py
-│       ├── migrations/
-│       ├── models.py
-│       ├── serializers.py
-│       ├── tests.py
-│       ├── urls.py
-│       └── views.py
 └── test_clients/
     └── voice_test.html
 ```
 
-## Django Backend: `logistics_agent/`
+## Frontend: `dispatch-pwa/`
 
-The Django application is the source of truth for all logistics state. It contains the database models, request validation, business rules, and REST endpoints that the Node agent calls.
+The frontend is a React 18 application built with Vite, TypeScript, Tailwind CSS, and `vite-plugin-pwa`.
 
-### Backend Stack
+### Frontend responsibilities
 
-- Django 6
-- Django REST Framework
+- Presents a role-based voice UI for drivers and warehouse managers.
+- Connects to the Node WebSocket voice server.
+- Captures microphone audio from the browser.
+- Receives synthesized speech audio and plays it back.
+- Initializes the server-side session with role and optional `driver_id`.
+
+### Main frontend files
+
+#### `dispatch-pwa/src/App.tsx`
+
+This is the application shell and voice session controller.
+
+It handles:
+
+- role selection between `driver` and `manager`
+- driver selection for predefined demo drivers `D001`, `D002`, and `D003`
+- WebSocket connect/disconnect lifecycle
+- microphone start/stop state
+- returned audio playback using `HTMLAudioElement`
+
+Important behavior:
+
+- When the user enters the voice screen, the app opens the WebSocket connection automatically.
+- The frontend sends a session initialization payload immediately after socket open.
+- Audio returned from the server is expected as WAV bytes and played with `Blob(..., { type: "audio/wav" })`.
+- When the user leaves the voice screen, the app closes the socket and stops the mic.
+
+#### `dispatch-pwa/src/services/voiceSocket.ts`
+
+This module is the browser-side transport layer for voice.
+
+It is responsible for:
+
+- building the WebSocket URL using the current page hostname and port `4000`
+- opening the connection to the voice server
+- sending a `session_init` JSON message such as:
+
+```json
+{
+  "type": "session_init",
+  "role": "driver",
+  "driver_id": "D001"
+}
+```
+
+- routing binary audio responses back to the UI
+- tracking connection state
+
+The frontend expects the voice server to run at `ws://<host>:4000` or `wss://<host>:4000`.
+
+#### `dispatch-pwa/src/services/microphone.ts`
+
+This module captures and streams microphone audio.
+
+Implementation details:
+
+- Uses `navigator.mediaDevices.getUserMedia({ audio: true })`
+- Uses `MediaRecorder`
+- Prefers `audio/webm;codecs=opus`, then `audio/webm`, then `audio/ogg;codecs=opus`
+- Emits audio every `250` ms
+- Sends each audio blob directly to the voice WebSocket
+
+This format choice matters because the STT server is configured to expect Opus audio in a WebM container.
+
+#### UI components
+
+- `CallButton.tsx`: large push-to-start / push-to-end call button
+- `StatusIndicator.tsx`: simple connected/connecting state indicator
+- `index.css`: project-wide visual styling, gradient background, font selection, and base layout
+
+### Frontend runtime flow
+
+1. User selects `Driver` or `Warehouse Manager`.
+2. Frontend opens a WebSocket connection to port `4000`.
+3. Frontend sends role context using `session_init`.
+4. User starts the call.
+5. Browser captures mic input and sends media chunks.
+6. Returned server audio is played in the browser.
+
+### Frontend setup
+
+```bash
+cd dispatch-pwa
+npm install
+npm run dev
+```
+
+The app is configured as a PWA through [`dispatch-pwa/vite.config.ts`](/home/spidy/Desktop/projects/Mathadu-Manju/dispatch-pwa/vite.config.ts).
+
+## Backend: `logistics_agent/`
+
+The Django application is the source of truth for all logistics state. The Node agent reads from and writes to this backend through explicit APIs.
+
+### Backend stack
+
+- Django 6.0.3
+- Django REST Framework 3.16.1
 - `django-cors-headers`
 - SQLite
 
-Dependencies are listed in `logistics_agent/requirements.txt`.
+Dependencies are listed in [`logistics_agent/requirements.txt`](/home/spidy/Desktop/projects/Mathadu-Manju/logistics_agent/requirements.txt).
 
-### Django Project Configuration
+### Django project configuration
 
-The Django project package is `logistics_agent/logistics_agent/`.
+The project package is `logistics_agent/logistics_agent/`.
 
-- `settings.py` enables `rest_framework`, `corsheaders`, and the local `shipments` app.
-- `CORS_ALLOW_ALL_ORIGINS = True` allows the Node layer and browser-based test clients to call the API during development.
-- The default database is SQLite at `logistics_agent/db.sqlite3`.
-- Root URL routing in `logistics_agent/logistics_agent/urls.py` mounts all shipment endpoints under `/api/`.
+Relevant files:
 
-### Data Model
+- [`logistics_agent/logistics_agent/settings.py`](/home/spidy/Desktop/projects/Mathadu-Manju/logistics_agent/logistics_agent/settings.py)
+- [`logistics_agent/logistics_agent/urls.py`](/home/spidy/Desktop/projects/Mathadu-Manju/logistics_agent/logistics_agent/urls.py)
+- [`logistics_agent/shipments/urls.py`](/home/spidy/Desktop/projects/Mathadu-Manju/logistics_agent/shipments/urls.py)
 
-The logistics domain is implemented in `logistics_agent/shipments/models.py`.
+The root URL config mounts shipment APIs under `/api/`.
+
+### Domain model
+
+The logistics domain lives in [`logistics_agent/shipments/models.py`](/home/spidy/Desktop/projects/Mathadu-Manju/logistics_agent/shipments/models.py).
 
 #### `Driver`
 
-Represents a delivery driver and stores:
+Fields:
 
 - `driver_id`
 - `name`
 - `phone`
 - `vehicle_number`
 
-Each `Shipment` can be assigned to a `Driver`.
+This model represents a delivery driver and can be assigned to many shipments.
 
 #### `Shipment`
 
-Represents a delivery item or job and stores:
+Fields:
 
 - `shipment_id`
 - `destination`
 - `driver`
 - `status`
-- timestamps for creation and update
+- `created_at`
+- `updated_at`
 
-Supported shipment statuses are:
+Supported statuses:
 
 - `pending`
 - `in_transit`
@@ -146,23 +231,23 @@ Supported shipment statuses are:
 - `delayed`
 - `incident`
 
-This is the central object used by most APIs.
+This is the central operational entity in the system.
 
 #### `DelayReport`
 
-Represents an operational delay reported against a shipment. It stores:
+Fields:
 
-- a foreign key to `Shipment`
+- `shipment`
 - `reason`
 - `reported_at`
 
-When a delay is reported, the shipment status is also updated to `delayed`.
+Creating a delay report is coupled with updating the linked shipment status to `delayed`.
 
 #### `Incident`
 
-Represents operational problems such as punctures or package damage. It stores:
+Fields:
 
-- a foreign key to `Shipment`
+- `shipment`
 - `incident_type`
 - `description`
 - `status`
@@ -170,35 +255,36 @@ Represents operational problems such as punctures or package damage. It stores:
 - `eta_minutes`
 - `reported_at`
 
-Supported incident statuses are:
+Supported incident statuses:
 
 - `reported`
 - `assistance_dispatched`
 - `resolved`
 
-When incidents are reported, the backend may also attach support assignment details such as a technician name and ETA.
+This model stores operational disruptions such as punctures, engine failures, or package damage.
 
 ### Serializers
 
-Request validation lives in `logistics_agent/shipments/serializers.py`.
+Validation lives in [`logistics_agent/shipments/serializers.py`](/home/spidy/Desktop/projects/Mathadu-Manju/logistics_agent/shipments/serializers.py).
 
-- `ShipmentStatusUpdateSerializer` validates `shipment_id` and `status`
-- `DelayReportSerializer` validates `shipment_id` and `reason`
-- `IncidentSerializer` validates `shipment_id`, `incident_type`, and `description`
-- `ShipmentSerializer` exposes the full shipment model when needed
+Key serializers:
 
-The serializers are intentionally simple and act mainly as input validation for API endpoints.
+- `ShipmentStatusUpdateSerializer`
+- `DelayReportSerializer`
+- `IncidentSerializer`
+- `ShipmentSerializer`
 
-### API Endpoints
+These serializers are lightweight and mostly validate request payload structure.
 
-All backend endpoints are defined in `logistics_agent/shipments/views.py` and routed in `logistics_agent/shipments/urls.py`.
+### API surface
+
+The APIs are implemented in [`logistics_agent/shipments/views.py`](/home/spidy/Desktop/projects/Mathadu-Manju/logistics_agent/shipments/views.py).
 
 #### `POST /api/update-shipment-status`
 
-Purpose:
-- Marks a shipment with a new status.
+Updates a shipment status.
 
-Expected payload:
+Example:
 
 ```json
 {
@@ -207,18 +293,11 @@ Expected payload:
 }
 ```
 
-Behavior:
-- validates the request
-- looks up the shipment
-- updates `Shipment.status`
-- returns a success response with the action performed
-
 #### `POST /api/report-delay`
 
-Purpose:
-- Records a delay and updates the shipment status to `delayed`.
+Creates a `DelayReport` and sets shipment status to `delayed`.
 
-Expected payload:
+Example:
 
 ```json
 {
@@ -227,18 +306,11 @@ Expected payload:
 }
 ```
 
-Behavior:
-- validates input
-- creates a `DelayReport`
-- marks the shipment as `delayed`
-- returns confirmation data
-
 #### `POST /api/report-incident`
 
-Purpose:
-- Records operational incidents.
+Creates an incident and updates shipment status to `incident`.
 
-Expected payload:
+Example:
 
 ```json
 {
@@ -248,75 +320,63 @@ Expected payload:
 }
 ```
 
-Behavior:
-- validates the request
-- finds the shipment
-- creates an `Incident`
-- updates shipment status to `incident`
-- applies simple business rules for support dispatch
+Current backend business rules:
 
-Current incident-specific logic includes:
-
-- `tire_puncture` -> assigns `Ramesh (Technician)` with ETA `20`
-- `engine_failure` -> assigns `Mahesh (Recovery Vehicle)` with ETA `40`
-- `package_damage` -> returns a warehouse-support message
-- any other type -> generic support notification message
+- `tire_puncture` assigns `Ramesh (Technician)` with ETA `20`
+- `engine_failure` assigns `Mahesh (Recovery Vehicle)` with ETA `40`
+- `package_damage` returns a warehouse support message without field technician assignment
+- all other incident types return a generic support message
 
 #### `POST /api/resolve-incident/`
 
-Purpose:
-- Marks the most recent active incident as resolved and resumes the shipment.
-
-Expected payload:
-
-```json
-{
-  "shipment_id": "A103"
-}
-```
-
-Behavior:
-- finds the shipment
-- locates the latest incident with status `reported` or `assistance_dispatched`
-- updates the incident to `resolved`
-- changes the shipment back to `in_transit`
+Finds the latest active incident for a shipment, marks it `resolved`, and sets the shipment back to `in_transit`.
 
 #### `GET /api/shipment-status/<shipment_id>/`
 
-Purpose:
-- Returns the current status and destination of a specific shipment.
-
-Example response shape:
-
-```json
-{
-  "success": true,
-  "action": "get_shipment_status",
-  "shipment_id": "A101",
-  "status": "in_transit",
-  "destination": "Warehouse 2"
-}
-```
+Returns shipment status and destination.
 
 #### `GET /api/next-delivery/<driver_id>/`
 
-Purpose:
-- Returns the next non-delivered and non-incident shipment assigned to a driver.
+Returns the earliest assigned shipment for a driver, excluding `delivered` and `incident`.
 
-Behavior:
-- filters shipments for the given driver
-- excludes shipments with status `delivered` and `incident`
-- orders by `created_at`
-- returns the first matching shipment
+#### `GET /api/assigned-shipments?driver_id=<id>&limit=<n>`
 
-If nothing is pending, the API returns a message indicating no pending deliveries.
+Returns a list of assigned shipments for a driver.
 
-#### `GET /api/dashboard/stats`
+#### `GET /api/query-shipments`
 
-Purpose:
-- Provides simple operational summary counts for the dashboard.
+Supports optional filters:
 
-Returned metrics:
+- `status`
+- `driver_id`
+- `limit`
+
+This is mainly intended for manager workflows.
+
+#### `GET /api/query-incidents`
+
+Supports optional filters:
+
+- `status`
+- `driver_id`
+- `limit`
+
+#### `POST /api/assign-driver`
+
+Assigns or reassigns a driver to a shipment.
+
+Example:
+
+```json
+{
+  "shipment_id": "A104",
+  "driver_id": "D001"
+}
+```
+
+#### `GET /api/dashboard` and `GET /api/dashboard/stats`
+
+Both routes return:
 
 - `total_shipments`
 - `delivered`
@@ -325,337 +385,20 @@ Returned metrics:
 
 #### `GET /api/agent-tools/`
 
-Purpose:
-- Returns tool definitions in LLM function-calling format.
+Returns tool definitions in tool-calling schema form for the AI layer.
 
-This endpoint is critical because the Node agent loads it at startup and uses it as the tool catalog for Groq. It describes:
+This endpoint is important because it documents the backend-approved tool contract. Even though the current Node implementation defines tools locally in code, this backend route still acts as the canonical tool inventory for the project design.
 
-- `update_shipment_status`
-- `report_delay`
-- `report_incident`
-- `resolve_incident`
-- `get_shipment_status`
-- `get_next_delivery`
-- `dashboard_stats`
+### Seed data
 
-### Seed Data
+Demo data is generated by [`logistics_agent/shipments/management/commands/seed_data.py`](/home/spidy/Desktop/projects/Mathadu-Manju/logistics_agent/shipments/management/commands/seed_data.py).
 
-Demo data generation is implemented in `logistics_agent/shipments/management/commands/seed_data.py`.
+It creates:
 
-The command:
-
-- creates 5 drivers with IDs `D001` to `D005`
-- creates 20 shipments with IDs `A001` to `A020`
-- assigns random statuses from `pending`, `in_transit`, `delivered`, and `delayed`
-- randomly assigns those shipments to created drivers
-
-This is useful for local testing of the voice and tool flows.
-
-Typical usage:
-
-```bash
-cd logistics_agent
-python manage.py migrate
-python manage.py seed_data
-python manage.py runserver
-```
-
-### Backend Testing State
-
-`logistics_agent/shipments/tests.py` currently contains only the default placeholder test file, so the backend does not yet have meaningful automated coverage.
-
-## Node AI Layer: `ai_agent/`
-
-The Node application is the orchestration layer between user input and the Django backend. It has two modes:
-
-- an HTTP agent service in `server.js`
-- a WebSocket voice pipeline in `voiceServer.js`
-
-### Node Stack
-
-Dependencies in `ai_agent/package.json` include:
-
-- `express`
-- `cors`
-- `axios`
-- `dotenv`
-- `groq-sdk`
-- `ws`
-- `@deepgram/sdk`
-
-The project uses ES modules via `"type": "module"`.
-
-### Configuration
-
-`ai_agent/config.js` loads environment variables and exports:
-
-- `DJANGO_API`
-- `PORT`
-
-Other required environment variables used across the voice layer are:
-
-- `GROQ_API_KEY`
-- `DEEPGRAM_API_KEY`
-
-### Core Node Modules
-
-#### `toolLoader.js`
-
-Responsibilities:
-
-- fetches the tool catalog from `GET <DJANGO_API>/api/agent-tools`
-- stores the loaded tool definitions in memory
-- exposes `loadTools()` and `getTools()`
-
-This module lets the LLM operate against the exact tool inventory declared by Django rather than a hardcoded copy in Node.
-
-#### `toolExecutor.js`
-
-Responsibilities:
-
-- maps logical tool names to Django endpoints
-- performs HTTP requests with Axios
-- logs each execution for traceability
-
-Current tool mapping includes:
-
-- `update_shipment_status` -> `POST /api/update-shipment-status`
-- `report_delay` -> `POST /api/report-delay`
-- `report_incident` -> `POST /api/report-incident`
-- `resolve_incident` -> `POST /api/resolve-incident/`
-- `get_shipment_status` -> `GET /api/shipment-status/<shipment_id>/`
-- `get_next_delivery` -> `GET /api/next-delivery/<driver_id>/`
-- `dashboard_stats` -> `GET /api/dashboard/stats`
-
-Important runtime logging now includes:
-
-- `Executing tool: <toolName>`
-- `Arguments: <args>`
-- `Tool result: <response.data>`
-
-Those logs are important when verifying that Django APIs are truly being hit instead of the LLM fabricating answers.
-
-#### `intentParser.js`
-
-Responsibilities:
-
-- normalizes STT transcripts
-- detects simple operational commands
-- returns direct tool invocations without consulting the LLM
-
-Normalization currently handles:
-
-- spoken digits `zero` through `nine`
-- common STT mistakes such as `soupment` -> `shipment`
-- split-word recognition such as `ship ment` -> `shipment`
-- spoken shipment forms like `a one zero three` -> `a103`
-
-Intent rules currently cover:
-
-- `shipment <id> delivered` -> `update_shipment_status`
-- `shipment <id> delayed` -> `report_delay`
-- `puncture` or `incident` with a shipment ID -> `report_incident`
-- `next delivery` -> `get_next_delivery`
-- `shipment status <id>` and `shipment <id> status` -> `get_shipment_status`
-- `dashboard update` and `dashboard stats` -> `dashboard_stats`
-
-This file is central to low-latency, non-LLM operational handling.
-
-#### `agentController.js`
-
-Responsibilities:
-
-- sends non-shortcut messages to Groq
-- passes the Django tool schema to the model
-- executes returned tool calls
-- blocks unsafe operational free-text responses
-- formats backend tool results into spoken text locally
-
-This file is the core anti-hallucination control point.
-
-Important safety behavior in the current version:
-
-- operational keywords are detected with `shipment`, `delivery`, `incident`, `delay`, and `dashboard`
-- if Groq returns no `tool_calls` for an operational query, the agent returns the safe fallback:
-  - `I need to retrieve that information from the logistics system.`
-- after a tool call is executed, the response is generated by local formatting code, not by a second LLM pass
-
-This means the current implementation no longer allows the LLM to invent logistics facts after tool execution.
-
-#### `groqClient.js`
-
-Responsibilities:
-
-- initializes the Groq SDK
-- reads the API key from `GROQ_API_KEY`
-- exports the reusable client instance
-
-#### `server.js`
-
-Responsibilities:
-
-- starts an Express API service
-- loads Django tool definitions at startup
-- exposes:
-  - `GET /health`
-  - `GET /tools`
-  - `POST /voice-agent`
-
-`POST /voice-agent` accepts a JSON body with a `message`, forwards it to `runAgent()`, and returns a JSON reply.
-
-This is useful for text-level testing without running the voice pipeline.
-
-#### `streamingSTT.js`
-
-Responsibilities:
-
-- connects to Deepgram’s live transcription WebSocket
-- forwards audio chunks from the browser or client
-- listens for final transcripts only
-- invokes the provided callback with final transcript text
-
-The current Deepgram model configured here is `nova-3`.
-
-#### `streamingTTS.js`
-
-Responsibilities:
-
-- sends text to Deepgram’s `speak` endpoint
-- receives synthesized audio
-- returns it as a `Buffer`
-
-This is important because the voice server must treat TTS output as a buffer, not as a Node stream.
-
-#### `voiceServer.js`
-
-Responsibilities:
-
-- accepts incoming WebSocket audio from a client
-- streams audio to Deepgram STT
-- de-duplicates repeated transcripts
-- runs `detectIntent()` first
-- calls Django tools directly for shortcut intents
-- falls back to `runAgent()` only when no shortcut matches
-- converts the final response text to audio with Deepgram TTS
-- sends the audio buffer back to the client
-
-Current behavior:
-
-- shortcut flow: direct Django API execution and local formatting
-- complex flow: Groq tool call, Django API execution, local formatting
-- operational no-tool LLM response: blocked
-
-### Test Client
-
-`test_clients/voice_test.html` is a minimal browser client for manual microphone testing.
-
-It:
-
-- opens a WebSocket connection to `ws://localhost:4000`
-- requests microphone access
-- streams audio chunks using `MediaRecorder`
-
-This file is useful for quick manual verification of the voice server path.
-
-## End-to-End Runtime Flow
-
-### Text Mode
-
-Used when interacting with the HTTP service in `ai_agent/server.js`.
-
-```text
-Client -> POST /voice-agent -> runAgent() -> tool call if needed -> Django API -> JSON reply
-```
-
-### Voice Mode
-
-Used when interacting with `ai_agent/voiceServer.js`.
-
-```text
-Browser mic
--> WebSocket audio
--> Deepgram STT
--> transcript
--> detectIntent()
--> direct tool execution or runAgent()
--> Django API
--> local response formatting
--> Deepgram TTS
--> audio buffer back to client
-```
-
-### Example Flows
-
-#### Simple operational command
-
-Input:
-
-```text
-Shipment A101 delivered
-```
-
-Expected route:
-
-```text
-STT -> intentParser -> update_shipment_status -> Django -> TTS
-```
-
-#### Shipment lookup
-
-Input:
-
-```text
-What is the shipment status A103?
-```
-
-Expected route:
-
-```text
-STT -> intentParser -> get_shipment_status -> Django -> TTS
-```
-
-#### Incident report
-
-Input:
-
-```text
-There is a tire puncture in shipment A103
-```
-
-Possible route:
-
-```text
-STT -> intentParser or LLM tool call -> report_incident -> Django -> TTS
-```
-
-#### Dashboard query
-
-Input:
-
-```text
-Give me the dashboard stats
-```
-
-Expected route:
-
-```text
-STT -> intentParser -> dashboard_stats -> Django -> TTS
-```
-
-## Current Hallucination Controls
-
-The project has explicit safeguards to stop fake logistics outputs:
-
-- direct regex shortcuts for common operational commands
-- Groq tool schemas loaded from Django
-- strict operational keyword block when no tool call is returned
-- no second LLM summarization after tool execution
-- deterministic response formatting from backend payloads
-- tool execution logs in Node for auditing
-
-This means the LLM is still present for reasoning, but logistics facts should be sourced from APIs rather than model memory.
-
-## Local Setup
+- 5 drivers: `D001` to `D005`
+- 20 shipments: `A001` to `A020`
+- random destinations like `Warehouse 1` to `Warehouse 5`
+- random statuses from `pending`, `in_transit`, `delivered`, `delayed`
 
 ### Backend setup
 
@@ -669,9 +412,44 @@ python manage.py seed_data
 python manage.py runserver
 ```
 
-### Node agent setup
+### Backend testing state
 
-Create `ai_agent/.env` with values similar to:
+[`logistics_agent/shipments/tests.py`](/home/spidy/Desktop/projects/Mathadu-Manju/logistics_agent/shipments/tests.py) is currently a placeholder, so the backend does not yet have meaningful automated coverage.
+
+## AI and Voice Layer: `ai_agent/`
+
+The Node application is the bridge between user input and logistics APIs. It exposes:
+
+- an HTTP agent service in `server.js`
+- a dedicated voice WebSocket server in `voiceServer.js`
+
+### AI layer stack
+
+Dependencies in [`ai_agent/package.json`](/home/spidy/Desktop/projects/Mathadu-Manju/ai_agent/package.json):
+
+- `express`
+- `cors`
+- `axios`
+- `dotenv`
+- `groq-sdk`
+- `ws`
+- `@deepgram/sdk`
+
+The project uses ES modules via `"type": "module"`.
+
+### Configuration
+
+[`ai_agent/config.js`](/home/spidy/Desktop/projects/Mathadu-Manju/ai_agent/config.js) loads:
+
+- `DJANGO_API`
+- `PORT`
+
+Additional required environment variables:
+
+- `GROQ_API_KEY`
+- `DEEPGRAM_API_KEY`
+
+Example `ai_agent/.env`:
 
 ```env
 DJANGO_API=http://127.0.0.1:8000
@@ -680,43 +458,471 @@ GROQ_API_KEY=your_groq_key
 DEEPGRAM_API_KEY=your_deepgram_key
 ```
 
-Then install and run:
+### Main AI modules
+
+#### `ai_agent/server.js`
+
+This is the HTTP service.
+
+Routes:
+
+- `GET /health`
+- `GET /tools`
+- `POST /voice-agent`
+
+`POST /voice-agent` accepts:
+
+```json
+{
+  "message": "what is the status of shipment A001",
+  "role": "manager"
+}
+```
+
+or:
+
+```json
+{
+  "message": "what is my next delivery",
+  "role": "driver",
+  "driver_id": "D001"
+}
+```
+
+This route is useful for text-level testing without running the full voice pipeline.
+
+#### `ai_agent/agentController.js`
+
+This file contains the main LLM orchestration logic.
+
+Responsibilities:
+
+- chooses the system prompt based on `role`
+- passes the allowed tool definitions to Groq
+- lets the model decide whether to emit a tool call
+- executes the first returned tool call
+- formats backend results into short spoken text
+- blocks unsafe free-text operational responses
+
+Current model:
+
+- `llama-3.1-8b-instant`
+
+Current safeguards:
+
+- low-signal utterances like `hi`, `ok`, `again` are rejected
+- operational words like `shipment`, `delivery`, `incident`, `delay` trigger a safe fallback if Groq does not return a tool call
+- after a tool executes, the final user-facing text is generated locally by `formatToolResult()`, not by a second LLM round
+
+This is the main anti-hallucination control point in the project.
+
+#### `ai_agent/toolLoader.js`
+
+This module defines the tool schemas available to each role.
+
+Driver tools:
+
+- `get_next_delivery`
+- `get_assigned_shipments`
+- `get_shipment_status`
+- `update_shipment_status`
+- `report_delay`
+- `report_incident`
+- `resolve_incident`
+
+Manager tools:
+
+- `dashboard_stats`
+- `query_shipments`
+- `query_incidents`
+- `update_shipment_status`
+- `assign_driver`
+
+The current implementation loads tools from local definitions rather than fetching them from Django at runtime.
+
+#### `ai_agent/toolExecutor.js`
+
+This module maps tool names to Django endpoints and executes them via Axios.
+
+Important behavior:
+
+- enforces role-based access control before calling Django
+- automatically injects `driver_id` for driver role requests
+- handles both `GET` and `POST` endpoint patterns
+- turns structured backend results into compact spoken responses
+
+Examples of formatted output:
+
+- `Shipment A001 has been marked as delivered.`
+- `Your next delivery is shipment A004 to Warehouse 2.`
+- `There are 3 deliveries completed, 1 delayed shipments, and 2 incidents.`
+
+#### `ai_agent/groqClient.js`
+
+Initializes the Groq SDK using `GROQ_API_KEY`.
+
+#### `ai_agent/voiceServer.js`
+
+This is the real-time voice gateway for the browser client.
+
+Responsibilities:
+
+- accepts browser WebSocket connections on port `4000`
+- stores role and `driver_id` on the WebSocket session
+- receives binary microphone chunks
+- forwards those chunks to Deepgram STT
+- normalizes the returned transcript
+- calls `runAgent()`
+- converts response text to speech
+- sends synthesized audio back to the browser
+
+The `session_init` message is important here because it binds the voice stream to either:
+
+- a driver session with `driver_id`
+- a manager session without driver identity
+
+The server also de-duplicates repeated transcripts so the same final utterance is not handled twice.
+
+## Detailed Audio Pipeline
+
+This is the most important technical path in the project.
+
+### Audio to text: browser mic to transcript
+
+The speech-to-text flow is implemented across:
+
+- [`dispatch-pwa/src/services/microphone.ts`](/home/spidy/Desktop/projects/Mathadu-Manju/dispatch-pwa/src/services/microphone.ts)
+- [`dispatch-pwa/src/services/voiceSocket.ts`](/home/spidy/Desktop/projects/Mathadu-Manju/dispatch-pwa/src/services/voiceSocket.ts)
+- [`ai_agent/voiceServer.js`](/home/spidy/Desktop/projects/Mathadu-Manju/ai_agent/voiceServer.js)
+- [`ai_agent/streamingSTT.js`](/home/spidy/Desktop/projects/Mathadu-Manju/ai_agent/streamingSTT.js)
+
+#### Step 1: browser captures audio
+
+When the user starts a call, the frontend:
+
+- requests microphone permission
+- creates a `MediaRecorder`
+- uses an Opus-capable MIME type if available
+- emits chunks every `250` milliseconds
+
+Each emitted `Blob` is sent directly over the active WebSocket.
+
+#### Step 2: browser sends audio over WebSocket
+
+The frontend sends raw binary blobs to the voice server. No client-side speech processing happens in the browser.
+
+This keeps the frontend lightweight and puts the speech logic on the server side.
+
+#### Step 3: Node voice server receives chunks
+
+In `voiceServer.js`, every non-JSON socket message is treated as an audio chunk.
+
+The server:
+
+- counts incoming chunks for logging
+- converts each message to a `Buffer`
+- forwards it to the live STT stream object created by `createSTTStream(...)`
+
+The voice server also accepts JSON messages for session control. Right now the key control message is `session_init`.
+
+#### Step 4: Deepgram streaming STT connection
+
+`streamingSTT.js` opens a live WebSocket connection to Deepgram using:
+
+- model: `nova-3`
+- language: `en-US`
+- `numerals=true`
+- `smart_format=true`
+- `interim_results=true`
+- `encoding=opus`
+- `container=webm`
+- `channels=1`
+
+These parameters matter:
+
+- `encoding=opus` and `container=webm` align with the browser `MediaRecorder` output
+- `numerals=true` helps convert spoken number sequences into machine-friendly forms
+- `smart_format=true` improves transcription readability
+
+If browser audio arrives before Deepgram is fully open, the code temporarily stores chunks in `pendingChunks` and flushes them after connection open.
+
+#### Step 5: transcript finalization
+
+The STT handler listens for Deepgram `Results` messages and extracts:
+
+- `msg.channel.alternatives[0].transcript`
+- `msg.is_final`
+- `msg.speech_final`
+
+Only final or speech-final transcripts are forwarded to the agent callback. This avoids responding to every partial interim result.
+
+#### Step 6: transcript normalization
+
+Before the text is given to the agent, `voiceServer.js` normalizes common speech-recognition issues:
+
+- `ship ment` -> `shipment`
+- `shipping` -> `shipment`
+- `soupment` -> `shipment`
+- `shipment id` -> `shipment`
+- `shipment number` -> `shipment`
+- `a 0 0 4` -> `a004`
+- `a 1 0 4` -> `a104`
+- filler words such as `please`, `hey`, `ok`, `okay`, `can you`, `could you` are removed
+
+This normalization step is important because shipment IDs and operational commands are short and easy for STT systems to mis-segment.
+
+#### Step 7: agent processing after transcription
+
+After normalization, the transcript is sent to `runAgent()` with:
+
+- `message`
+- `role`
+- `driver_id`
+
+That means the same transcript can lead to different allowed actions depending on whether the session belongs to a driver or a manager.
+
+### Text to audio: response text to spoken reply
+
+The text-to-speech flow is implemented across:
+
+- [`ai_agent/agentController.js`](/home/spidy/Desktop/projects/Mathadu-Manju/ai_agent/agentController.js)
+- [`ai_agent/streamingTTS.js`](/home/spidy/Desktop/projects/Mathadu-Manju/ai_agent/streamingTTS.js)
+- [`ai_agent/voiceServer.js`](/home/spidy/Desktop/projects/Mathadu-Manju/ai_agent/voiceServer.js)
+- [`dispatch-pwa/src/App.tsx`](/home/spidy/Desktop/projects/Mathadu-Manju/dispatch-pwa/src/App.tsx)
+
+#### Step 1: agent returns final response text
+
+`runAgent()` returns a plain string, for example:
+
+- `Shipment A001 has been marked as delivered.`
+- `Your next delivery is shipment A004 to Warehouse 2.`
+- `I need to retrieve that information from the logistics system.`
+
+This string is the only thing passed into TTS.
+
+#### Step 2: Node calls Deepgram Speak API
+
+`streamingTTS.js` sends an HTTP `POST` request to:
+
+```text
+https://api.deepgram.com/v1/speak?model=aura-asteria-en&encoding=linear16&container=wav
+```
+
+Request body:
+
+```json
+{
+  "text": "Shipment A001 has been marked as delivered."
+}
+```
+
+The request includes:
+
+- `Authorization: Token <DEEPGRAM_API_KEY>`
+- `Content-Type: application/json`
+
+#### Step 3: TTS response format
+
+Deepgram returns synthesized audio as binary data.
+
+The code:
+
+- reads it with `response.arrayBuffer()`
+- converts it to a Node `Buffer`
+- logs byte length for debugging
+
+The chosen output format is:
+
+- audio encoding: `linear16`
+- container: `wav`
+
+This choice makes browser playback straightforward because WAV is easy to hand back to `Audio(...)`.
+
+#### Step 4: server sends audio bytes back to the browser
+
+`voiceServer.js` sends the TTS buffer directly over the same WebSocket connection.
+
+The browser treats incoming binary data as an `ArrayBuffer` or `Blob`, converts it into a WAV blob, creates an object URL, and plays it.
+
+#### Step 5: browser playback
+
+In `App.tsx`, the client:
+
+- stops and cleans up any previously playing audio
+- creates a new `Audio` object from the returned WAV blob
+- plays it using `audio.play()`
+
+This gives the app a full duplex-feeling experience even though the current implementation is turn-based:
+
+- user speaks
+- server waits for final transcript
+- agent responds
+- server returns synthesized reply audio
+
+### Audio pipeline summary
+
+```text
+Mic
+-> MediaRecorder (webm/opus)
+-> WebSocket
+-> Node voice server
+-> Deepgram STT
+-> normalized transcript
+-> runAgent()
+-> backend tool execution if needed
+-> final text
+-> Deepgram TTS (wav/linear16)
+-> WebSocket
+-> browser audio playback
+```
+
+## Role Model and Access Control
+
+The system has two roles.
+
+### Driver role
+
+Drivers can:
+
+- get next delivery
+- get assigned shipments
+- check shipment status
+- mark shipments delivered or in transit
+- report delays
+- report incidents
+- resolve incidents
+
+Drivers cannot:
+
+- access dashboard analytics
+- query warehouse-wide incidents
+- assign drivers
+
+This restriction is enforced in `toolExecutor.js`, not only in prompts.
+
+### Manager role
+
+Managers can:
+
+- view dashboard stats
+- query shipments
+- query incidents
+- update shipment status
+- assign drivers
+
+## End-to-End Examples
+
+### Example 1: driver marks a shipment delivered
+
+Spoken input:
+
+```text
+Shipment A001 delivered
+```
+
+Flow:
+
+1. Browser records and streams audio.
+2. Deepgram returns final transcript.
+3. Transcript is normalized.
+4. `runAgent()` asks Groq to choose a tool.
+5. Groq emits `update_shipment_status`.
+6. Node calls Django `POST /api/update-shipment-status`.
+7. Django updates the shipment.
+8. Node formats the result text.
+9. Deepgram synthesizes the text.
+10. Browser plays the reply audio.
+
+### Example 2: driver reports a puncture
+
+Spoken input:
+
+```text
+There is a puncture in shipment A103
+```
+
+Flow:
+
+1. Transcript reaches the agent.
+2. Groq chooses `report_incident`.
+3. Django creates an `Incident`.
+4. Backend assigns technician support for `tire_puncture` if that exact incident type is sent.
+5. Result is formatted into spoken text and returned as audio.
+
+### Example 3: manager asks for dashboard stats
+
+Spoken input:
+
+```text
+Give me the dashboard stats
+```
+
+Flow:
+
+1. Manager session transcript reaches `runAgent()`.
+2. Groq chooses `dashboard_stats`.
+3. Node calls Django dashboard API.
+4. Response is formatted into a short summary.
+5. TTS converts the summary into audio.
+
+## Manual Testing
+
+### Run the backend
+
+```bash
+cd logistics_agent
+python manage.py migrate
+python manage.py seed_data
+python manage.py runserver
+```
+
+### Run the AI HTTP service
 
 ```bash
 cd ai_agent
 npm install
-npm start
+node server.js
 ```
 
-### Voice server setup
-
-Run the dedicated voice server separately when testing streaming audio:
+### Run the voice WebSocket server
 
 ```bash
 cd ai_agent
 node voiceServer.js
 ```
 
-Then open `test_clients/voice_test.html` in a browser and start microphone streaming.
+### Run the frontend
 
-## Current Limitations And Notes
+```bash
+cd dispatch-pwa
+npm install
+npm run dev
+```
 
-- The backend test suite is effectively empty.
-- The project uses SQLite and development-oriented settings.
-- `ALLOWED_HOSTS` is empty and `DEBUG` is enabled, so the Django setup is not production-ready.
-- The root project contains both a text agent service and a separate voice WebSocket service in Node.
-- `get_next_delivery` currently uses a hardcoded driver ID `D001` in the shortcut parser.
-- `shipments/models.py` contains duplicated field declarations at the bottom of `Incident`; Django migration state is authoritative, but the file would benefit from cleanup.
+### Minimal voice client
 
-## Recommended Next Improvements
+[`test_clients/voice_test.html`](/home/spidy/Desktop/projects/Mathadu-Manju/test_clients/voice_test.html) is a stripped-down browser client for microphone streaming tests. It is useful for quick connection checks, but it does not implement the full session setup or playback behavior of the React app.
 
-- add proper backend and Node integration tests
-- remove hardcoded driver assumptions from `intentParser.js`
-- add structured response templates per tool instead of generic key-value formatting
-- improve frontend or test-client playback so returned TTS audio is played automatically
-- harden production configuration, secrets, CORS, and deployment settings
-- add explicit validation for supported incident types at the serializer layer
+## Current Implementation Notes
+
+- The root README previously described some older behavior; this version reflects the current code.
+- `intentParser.js` and `toolRouter.js` contain transcript parsing helpers, but they are not on the active runtime path in the current `voiceServer.js` and `server.js` flow.
+- `toolLoader.js` currently defines tools locally instead of fetching them from Django at startup.
+- The backend test file is still a placeholder.
+- `shipments/models.py` contains duplicated `Incident` field declarations at the bottom of the class; Django migration state is still the effective source of truth, but the file should be cleaned up.
+- The voice pipeline is turn-based, not full duplex conversational streaming.
+- Browser driver selection currently exposes only three hardcoded driver choices in the UI even though seed data creates five drivers.
+
+## Improvement Opportunities
+
+- Add backend API tests for shipment, delay, and incident flows.
+- Add integration tests for WebSocket voice sessions.
+- Remove unused agent helper files or wire them in intentionally.
+- Align `toolLoader.js` with the backend `agent-tools` endpoint if a single source of truth is desired.
+- Add stronger serializer validation for allowed incident types and shipment statuses.
+- Persist conversation/session history if multi-turn voice interactions are required.
+- Add better UI feedback for recording state, STT state, and agent processing state.
 
 ## Summary
 
-Mathadu-Manju is a hybrid logistics voice assistant where Django owns the operational data and Node owns orchestration, voice integration, and controlled LLM usage. The project is already structured around a sound principle: logistics facts should come from backend tools, while the LLM should be limited to tool selection and limited reasoning only when direct intent shortcuts do not apply.
+Mathadu-Manju is a practical logistics voice agent architecture where Django owns the operational truth, Node owns orchestration and speech integration, and the React frontend provides the user-facing call experience. The most important implementation detail is the audio pipeline: browser audio is captured as WebM/Opus, transcribed by Deepgram STT, normalized and routed through the agent/tool layer, converted back to speech with Deepgram TTS as WAV, and played in the browser as the final response.

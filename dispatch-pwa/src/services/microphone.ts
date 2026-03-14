@@ -42,11 +42,13 @@ export async function startMic() {
         loggedChunkFormat = true
       }
 
-      sendAudio(event.data)
+      void event.data.arrayBuffer().then((buffer) => {
+        sendAudio(buffer)
+      })
     }
   }
 
-  recorder.start(250)
+  recorder.start(100)
 }
 
 export function stopMic() {

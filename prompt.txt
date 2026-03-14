@@ -1,127 +1,39 @@
-ode voiceServer.js
-[dotenv@17.3.1] injecting env (0) from .env -- tip: 🛡️ auth for agents: https://vestauth.com
-[dotenv@17.3.1] injecting env (0) from .env -- tip: ⚙️  write to custom object with { processEnv: myObject }
-Voice server ready
-Voice pipeline running on port 4000
-Voice client connected
-Role: driver
-Driver ID: D001
-Deepgram STT connected
-Audio chunks received: 1
-------------------------------------------------
-Transcript: Can you give me the updates on today's order?
-Role: driver
-LLM tool: get_assigned_shipments
-Tool args: { driver_id: 'D001', limit: 10 }
-Tool get_assigned_shipments executed in 13 ms
-Tool result: {
-  success: true,
-  action: 'get_assigned_shipments',
-  driver_id: 'D001',
-  shipments: [
-    {
-      shipment_id: 'A001',
-      status: 'delivered',
-      destination: 'Warehouse 1'
-    },
-    {
-      shipment_id: 'A015',
-      status: 'delivered',
-      destination: 'Warehouse 4'
-    },
-    {
-      shipment_id: 'A017',
-      status: 'delivered',
-      destination: 'Warehouse 4'
-    },
-    {
-      shipment_id: 'A018',
-      status: 'delivered',
-      destination: 'Warehouse 1'
-    }
-  ]
-}
-------------------------------------------------
-Agent latency: 591 ms
-AI: Assigned shipments: A001 delivered, A015 delivered, A017 delivered, A018 delivered.
-Audio chunks received: 20
-TTS bytes: 174472
-Sending audio bytes: 174472
-------------------------------------------------
-Audio chunks received: 40
-Audio chunks received: 60
-Voice client disconnected
-Deepgram STT closed: { code: 1005, reason: '' }
-Voice client connected
-Role: driver
-Driver ID: D002
-Deepgram STT connected
-Audio chunks received: 1
-------------------------------------------------
-Transcript: Can you give me the updates on today's order?
-Role: driver
-LLM tool: get_assigned_shipments
-Tool args: { driver_id: 'D002', limit: 10 }
-Tool get_assigned_shipments executed in 6 ms
-Tool result: {
-  success: true,
-  action: 'get_assigned_shipments',
-  driver_id: 'D002',
-  shipments: [
-    {
-      shipment_id: 'A004',
-      status: 'in_transit',
-      destination: 'Warehouse 1'
-    },
-    {
-      shipment_id: 'A005',
-      status: 'delivered',
-      destination: 'Warehouse 2'
-    },
-    {
-      shipment_id: 'A006',
-      status: 'in_transit',
-      destination: 'Warehouse 2'
-    },
-    {
-      shipment_id: 'A013',
-      status: 'delivered',
-      destination: 'Warehouse 4'
-    }
-  ]
-}
-------------------------------------------------
-Agent latency: 387 ms
-AI: Assigned shipments: A004 in_transit, A005 delivered, A006 in_transit, A013 delivered.
-Audio chunks received: 20
-TTS bytes: 201220
-Sending audio bytes: 201220
-------------------------------------------------
-Audio chunks received: 40
-Audio chunks received: 60
-Voice client disconnected
-Deepgram STT closed: { code: 1005, reason: '' }
-Voice client connected
-Role: driver
-Driver ID: D003
-Audio chunks received: 1
-Deepgram STT connected
-Audio chunks received: 20
-Voice client disconnected
-Deepgram STT closed: { code: 1005, reason: '' }
-Voice client connected
-Role: manager
-Driver ID: null
-Audio chunks received: 1
-Deepgram STT connected
-Audio chunks received: 20
-Deepgram STT event: Metadata {
-  type: 'Metadata',
-  transaction_key: 'deprecated',
-  request_id: 'da040eea-1f25-4264-92dd-9ba832cfe611',
-  sha256: '762b5867b5b5545c79eb9e7a841d8cbfdab7afa56ea404971dbac0710e0e34b8',
-  created: '2026-03-13T22:05:26.472Z',
-  duration: 0,
-  channels: 0
-}
-Deepgram STT closed: { code: 1000, reason: '' }
+Optimize the voiceServer.js latency.
+
+Changes required:
+
+1. Reduce audio chunk window
+Replace:
+setTimeout(..., 3000)
+
+With:
+setTimeout(..., 800)
+
+2. Skip small buffers
+Before transcription add:
+if (audioBuffer.length < 12000) return
+
+3. Prevent concurrent Whisper calls
+Add:
+let processing = false
+
+Before transcribeAudio:
+if (processing) return
+processing = true
+
+After transcription:
+processing = false
+
+4. Update whisperSTT.js model
+
+Replace:
+whisper-large-v3-turbo
+
+With:
+distil-whisper-large-v3-en
+
+Return the updated voiceServer.js and whisperSTT.js.
+
+Start TTS as soon as the agent responds, even if Whisper continues listening.
+
+This makes it feel instant, even if transcription took ~800 ms.
